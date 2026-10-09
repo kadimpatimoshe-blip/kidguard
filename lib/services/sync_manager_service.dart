@@ -1,4 +1,5 @@
-import 'connectivity_plus/connectivity_plus.dart'; // Note: connectivity package check
+import 'package:connectivity_plus/connectivity_plus.dart';
+
 import 'offline_storage_service.dart';
 
 class SyncManagerService {
@@ -7,11 +8,12 @@ class SyncManagerService {
   // Check internet and sync pending offline recordings
   Future<void> syncOfflineDataToServer() async {
     // Check if internet is available
-    var connectivityResult = await (Connectivity().checkConnectivity());
-    
-    if (connectivityResult != ConnectivityResult.none) {
+    final connectivityResult = await Connectivity().checkConnectivity();
+
+    if (!connectivityResult.contains(ConnectivityResult.none)) {
       // Get all unsynced local records from internal memory
-      List<Map<String, dynamic>> unsyncedList = await _storageService.getUnsyncedData();
+      List<Map<String, dynamic>> unsyncedList =
+          await _storageService.getUnsyncedData();
 
       for (var record in unsyncedList) {
         String filePath = record['path'];
@@ -31,6 +33,6 @@ class SyncManagerService {
   Future<bool> _uploadToServer(String filePath) async {
     // Implement actual server upload logic here (WebRTC / HTTP POST)
     await Future.delayed(const Duration(seconds: 1)); // Simulation
-    return true; 
+    return true;
   }
 }

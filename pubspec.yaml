@@ -5,7 +5,8 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.6.2 <4.0.0'
+  flutter: '>=3.27.4'
 
 dependencies:
   flutter:
@@ -13,6 +14,15 @@ dependencies:
   
   # State Management (MVVM Architecture)
   provider: ^6.1.1
+
+  # Firebase child pairing
+  firebase_auth: ^6.7.0
+  firebase_core: ^4.15.0
+  firebase_database: ^12.6.0
+
+  # Dashboard charts and network connectivity
+  connectivity_plus: ^7.3.2
+  fl_chart: ^1.2.0
 
   # Live Camera & Audio / Screen Mirroring Streaming
   flutter_webrtc: ^0.9.48

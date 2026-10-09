@@ -1,0 +1,1 @@
+ /workspaces/kidguard/.dart_tool/flutter_build/487b35dccba70706d5bdef8bb2dd4fe1/build_hooks_result.json:  /workspaces/kidguard/.dart_tool/package_config.json /workspaces/kidguard/flutter/bin/cache/dart-sdk/version /workspaces/kidguard/pubspec.yaml
