@@ -527,6 +527,6 @@
   "generator": "pub",
   "generatorVersion": "3.13.5",
   "flutterRoot": "file:///workspaces/kidguard/flutter",
-  "flutterVersion": "3.47.6",
+  "flutterVersion": "3.47.7",
   "pubCache": "file:///home/codespace/.pub-cache"
 }
