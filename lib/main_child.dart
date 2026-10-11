@@ -3,17 +3,41 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 
-import 'services/firebase_config.dart';
 import 'views/auth_screen.dart';
 import 'views/child_pairing_view.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const KidGuardChildApp());
+
+  late final FirebaseApp app;
+  try {
+    app = await Firebase.initializeApp(
+      options: const FirebaseOptions(
+        apiKey: 'AIzaSyCn-0mbkQNSlOIvUA3Tv9QKFn8skyZL0vg',
+        appId: '1:897177192961:android:205829551a9fac30938e00',
+        messagingSenderId: '897177192961',
+        projectId: 'kidguard-3b499',
+        databaseURL:
+            'https://kidguard-3b499-default-rtdb.asia-southeast1.firebasedatabase.app',
+        storageBucket: 'kidguard-3b499.firebasestorage.app',
+      ),
+    );
+  } catch (error) {
+    runApp(
+      MaterialApp(
+        home: FirebaseStartupError(error: error.toString()),
+      ),
+    );
+    return;
+  }
+
+  runApp(KidGuardChildApp(firebaseApp: app));
 }
 
 class KidGuardChildApp extends StatefulWidget {
-  const KidGuardChildApp({super.key});
+  const KidGuardChildApp({required this.firebaseApp, super.key});
+
+  final FirebaseApp firebaseApp;
 
   @override
   State<KidGuardChildApp> createState() => _KidGuardChildAppState();
@@ -25,12 +49,10 @@ class _KidGuardChildAppState extends State<KidGuardChildApp> {
   @override
   void initState() {
     super.initState();
-    _firebaseServicesFuture = _initializeFirebase();
+    _firebaseServicesFuture = _initializeFirebase(widget.firebaseApp);
   }
 
-  Future<_FirebaseServices> _initializeFirebase() async {
-    final options = FirebaseConfig.fromEnvironment();
-    final app = await Firebase.initializeApp(options: options);
+  Future<_FirebaseServices> _initializeFirebase(FirebaseApp app) async {
     final auth = FirebaseAuth.instanceFor(app: app);
     await auth.signOut();
 
@@ -38,7 +60,7 @@ class _KidGuardChildAppState extends State<KidGuardChildApp> {
       auth: auth,
       database: FirebaseDatabase.instanceFor(
         app: app,
-        databaseURL: options.databaseURL,
+        databaseURL: app.options.databaseURL,
       ),
     );
   }
