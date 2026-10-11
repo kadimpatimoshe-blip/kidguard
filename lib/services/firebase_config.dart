@@ -17,19 +17,15 @@ class FirebaseConfig {
   static FirebaseOptions fromEnvironment() {
     if (kIsWeb) return web;
 
-    const apiKey = String.fromEnvironment('FIREBASE_API_KEY');
     const appId = String.fromEnvironment('FIREBASE_APP_ID');
     const messagingSenderId =
         String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID');
-    const projectId = String.fromEnvironment('FIREBASE_PROJECT_ID');
     const databaseURL = String.fromEnvironment('FIREBASE_DATABASE_URL');
     const authDomain = String.fromEnvironment('FIREBASE_AUTH_DOMAIN');
 
     final missingValues = <String>[
-      if (apiKey.isEmpty) 'FIREBASE_API_KEY',
       if (appId.isEmpty) 'FIREBASE_APP_ID',
       if (messagingSenderId.isEmpty) 'FIREBASE_MESSAGING_SENDER_ID',
-      if (projectId.isEmpty) 'FIREBASE_PROJECT_ID',
       if (databaseURL.isEmpty) 'FIREBASE_DATABASE_URL',
     ];
     if (missingValues.isNotEmpty) {
@@ -39,10 +35,10 @@ class FirebaseConfig {
     }
 
     return FirebaseOptions(
-      apiKey: apiKey,
+      apiKey: 'AIzaSyCn_0mbkQNSlOIvUA3Tv9QKFn8skyZL0vg',
       appId: appId,
       messagingSenderId: messagingSenderId,
-      projectId: projectId,
+      projectId: 'kidguard-3b499',
       databaseURL: databaseURL,
       authDomain: authDomain.isEmpty ? null : authDomain,
     );

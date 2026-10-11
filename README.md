@@ -65,15 +65,14 @@ commands and write their acknowledgement at that path. Verify the command's
 Authentication alone does not secure database paths; do not enable
 unrestricted database access.
 
-Run the parent web app with values from your Firebase project's web app
-settings and Realtime Database page:
+The API key and project ID are fixed in `lib/services/firebase_config.dart`.
+Run the parent app with the app ID, sender ID, and Realtime Database URL from
+the Firebase project settings:
 
 ```sh
 flutter run -d chrome --target lib/main_parent.dart \
-	--dart-define=FIREBASE_API_KEY=... \
 	--dart-define=FIREBASE_APP_ID=... \
 	--dart-define=FIREBASE_MESSAGING_SENDER_ID=... \
-	--dart-define=FIREBASE_PROJECT_ID=... \
 	--dart-define=FIREBASE_DATABASE_URL=... \
 	--dart-define=FIREBASE_AUTH_DOMAIN=...
 ```
@@ -82,10 +81,8 @@ The same parent app runs on Android, for example:
 
 ```sh
 flutter run -d <android-device> --target lib/main.dart \
-	--dart-define=FIREBASE_API_KEY=... \
 	--dart-define=FIREBASE_APP_ID=... \
 	--dart-define=FIREBASE_MESSAGING_SENDER_ID=... \
-	--dart-define=FIREBASE_PROJECT_ID=... \
 	--dart-define=FIREBASE_DATABASE_URL=...
 ```
 

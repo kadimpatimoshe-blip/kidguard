@@ -13,7 +13,7 @@ Future<void> main() async {
   try {
     app = await Firebase.initializeApp(
       options: const FirebaseOptions(
-        apiKey: 'AIzaSyCn-0mbkQNSlOIvUA3Tv9QKFn8skyZL0vg',
+        apiKey: 'AIzaSyCn_0mbkQNSlOIvUA3Tv9QKFn8skyZL0vg',
         appId: '1:897177192961:android:205829551a9fac30938e00',
         messagingSenderId: '897177192961',
         projectId: 'kidguard-3b499',
