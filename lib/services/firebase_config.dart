@@ -3,7 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 
 class FirebaseConfig {
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyAA0Gf_dLsJUhSw7WE0q4XiW4pkRL80m4o',
+    apiKey: 'AIzaSyCn_0mbkQNSlOIvUA3Tv9QKFn8skyZL0vg',
     appId: '1:897177192961:web:286e429b79dabe05938e00',
     messagingSenderId: '897177192961',
     projectId: 'kidguard-3b499',
