@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Java
         uses: actions/setup-java@v3
@@ -30,7 +30,8 @@ jobs:
         run: flutter build apk --target lib/main_child.dart --release
 
       - name: Upload APK Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: child-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+        
