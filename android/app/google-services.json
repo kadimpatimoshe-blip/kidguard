@@ -1,0 +1,49 @@
+{
+      "project_info": {
+          "project_number": "897177192961",
+              "firebase_url": "https://kidguard-3b499-default-rtdb.asia-southeast1.firebasedatabase.app",
+                  "project_id": "kidguard-3b499",
+                      "storage_bucket": "kidguard-3b499.firebasestorage.app"
+                        },
+                          "client": [
+                              {
+                                    "client_info": {
+                                            "mobilesdk_app_id": "1:897177192961:android:205829551a9fac30938e00",
+                                                    "android_client_info": {
+                                                              "package_name": "com.example.kidguard"
+                                                                      }
+                                                                            },
+                                                                                  "oauth_client": [],
+                                                                                        "api_key": [
+                                                                                                {
+                                                                                                          "current_key": "AIzaSyCn_0mbkQNSlOIvUA3Tv9QKFn8skyZL0vg"
+                                                                                                                  }
+                                                                                                                        ],
+                                                                                                                              "services": {
+                                                                                                                                      "appinvite_service": {
+                                                                                                                                                "other_platform_oauth_client": []
+                                                                                                                                                        }
+                                                                                                                                                              }
+                                                                                                                                                                  },
+                                                                                                                                                                      {
+                                                                                                                                                                            "client_info": {
+                                                                                                                                                                                    "mobilesdk_app_id": "1:897177192961:android:1cfc284ef408da8f938e00",
+                                                                                                                                                                                            "android_client_info": {
+                                                                                                                                                                                                      "package_name": "com.kidguard.parent"
+                                                                                                                                                                                                              }
+                                                                                                                                                                                                                    },
+                                                                                                                                                                                                                          "oauth_client": [],
+                                                                                                                                                                                                                                "api_key": [
+                                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                                                  "current_key": "AIzaSyCn_0mbkQNSlOIvUA3Tv9QKFn8skyZL0vg"
+                                                                                                                                                                                                                                                          }
+                                                                                                                                                                                                                                                                ],
+                                                                                                                                                                                                                                                                      "services": {
+                                                                                                                                                                                                                                                                              "appinvite_service": {
+                                                                                                                                                                                                                                                                                        "other_platform_oauth_client": []
+                                                                                                                                                                                                                                                                                                }
+                                                                                                                                                                                                                                                                                                      }
+                                                                                                                                                                                                                                                                                                          }
+                                                                                                                                                                                                                                                                                                            ],
+                                                                                                                                                                                                                                                                                                              "configuration_version": "1"
+                                                                                                                                                                                                                                                                                                              }
