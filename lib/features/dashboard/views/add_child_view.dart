@@ -9,11 +9,13 @@ class AddChildView extends StatefulWidget {
   const AddChildView({
     required this.database,
     required this.parentUid,
+    this.onPaired,
     super.key,
   });
 
   final FirebaseDatabase database;
   final String parentUid;
+  final VoidCallback? onPaired;
 
   @override
   State<AddChildView> createState() => _AddChildViewState();
@@ -48,6 +50,7 @@ class _AddChildViewState extends State<AddChildView> {
       ).claimPairingCode(code);
       if (!mounted) return;
       setState(() => _pairedDevice = device);
+      widget.onPaired?.call();
     } on FirebaseException catch (error) {
       if (!mounted) return;
       setState(() => _errorMessage = error.message ?? error.code);

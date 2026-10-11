@@ -1,5 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.kidguard">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Audio & Video Permissions -->
     <uses-permission android:name="android.permission.CAMERA" />

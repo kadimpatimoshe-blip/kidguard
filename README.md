@@ -1,36 +1,75 @@
-# KidGuard Parent Web App
+# KidGuard Parent and Child Apps
 
-The app initializes Firebase from build-time configuration and first displays
-an Email/Password login and registration screen. After authentication, it
-checks `parents/{parentUid}/children`: parents with linked devices go directly
-to the Parent Dashboard; parents with no linked devices see the Add Child code
-entry screen. Pairing claims a child device's 4- or 6-digit code, links the
-child under
-`parents/{parentUid}/children/{childId}`, and deletes the used pairing-code
-record. Pairing-code and linked-child records use the same exact fields:
-`childId`, `pairingCode`, `status`, and `timestamp`. The child creates a
-pairing-code record with `status: waiting`; the parent claim changes the status
-to `paired` and refreshes `timestamp`. The parent UID is represented by the
-path and is not duplicated in either record. Pairing codes expire five minutes
-after their creation timestamp. The child app automatically requests a fresh
-code at expiry, and the parent rejects expired codes. On a valid claim, the
-parent uses one multi-location database update to link the child and remove the
-pairing code. This makes the writes atomic but does not prevent simultaneous
-claims from both succeeding.
+The parent and child apps have separate entrypoints. The parent app runs on
+Web and Android from the same Flutter application: `lib/main.dart` is the
+default parent entrypoint, and `lib/main_parent.dart` is available as an
+explicit target. It displays its Email/Password login and registration screen,
+then checks `parents/{parentUid}/children`: parents with linked devices go to
+the Parent Dashboard, and parents with no linked devices see the Add Child
+code entry screen. The child app requires Email/Password authentication before
+opening its pairing screen and signs out any existing session on startup. Web
+auth uses non-persistent storage, so users must log in again after a restart.
 
-The child pairing screen is available at the `/child` named route and through
-the **Go to Child Mode** buttons on the login and Parent Dashboard screens. The
-child route requires a non-anonymous Firebase Email/Password account; users can
-register or log in from the child route before generating a pairing code.
-Anonymous authentication is not used for pairing. Realtime Database rules must
-also require authenticated access to pairing codes and parent-child records;
-Firebase Authentication alone does not secure database paths.
+Pairing claims a child device's 4-digit code and links the child at
+`parents/{parentUid}/children/{childId}`. Pairing records contain `childId`,
+`deviceId`, `childUid`, `pairingCode`, `status`, and `timestamp`; `deviceId`
+is the authenticated child UID used for signaling. Once claimed, the parent
+also adds `parentUid` to the pairing record so the child can identify the
+linked parent. Linked-child records contain `deviceId` and `childUid` so the
+parent dashboard can address the paired child. Pairing codes expire five
+minutes after their creation timestamp. The child app automatically requests
+a fresh code at expiry, and the parent rejects expired codes.
 
-Run the web app with values from your Firebase project's web app settings and
-Realtime Database page:
+While running, the child updates
+`parents/{parentUid}/children/{childId}/presence` with `online`,
+`heartbeatAt`, and `lastSeen`. A Realtime Database on-disconnect handler marks
+the device offline. It also syncs the non-sensitive `platform` and `appState`
+fields under `telemetry`. The parent dashboard treats a heartbeat older than
+90 seconds as offline and displays the latest platform and app state. A parent
+may link up to five child devices; unlink one from its dashboard card to free a
+pairing slot.
+
+The child app does not access camera or microphone until the child chooses
+**Start live stream** or the paired parent sends a remote start request. The
+child app must be open, and the browser or Android device must grant camera and
+microphone permissions. The child can stop sharing locally or the parent can
+send a remote stop request. While connected, the parent dashboard can also
+switch between front and back cameras and toggle microphone mute. Remote
+commands are written to `/devices/{deviceId}/control`; the child listens to
+that node and records an acknowledgement so completed commands are not replayed
+after reconnecting. The parent dashboard's **Live stream** page also listens
+at `/webrtc_signaling/{deviceId}`, receives the child's WebRTC offer and ICE
+candidates, writes an answer and its ICE candidates, and renders the received
+video. Audio and video are sent peer-to-peer using WebRTC; Realtime Database
+carries control commands and signaling only. Browser camera access requires
+HTTPS (or localhost). For reliable connections across restrictive NATs and
+firewalls, configure an authorized TURN service alongside the default STUN
+server in `lib/services/webrtc_service.dart`. Streaming stops when the child
+app leaves the foreground.
+
+Realtime Database rules must require authenticated access to pairing codes,
+allow parents to read and manage only their own child records, and allow a
+child account to write only `presence` and `telemetry` for records whose
+`childUid` matches `auth.uid`. For WebRTC, allow the child at
+`webrtc_signaling/{deviceId}` (where `deviceId == auth.uid`) to publish the
+offer and child ICE candidates. Allow only the parent UID recorded on that
+paired child record to read that signaling node and write its answer, parent
+ICE candidates, viewer status, and the signaling status/timestamp. The child
+initializes `deviceId`, `parentUid`, and `childId` on the signaling node so
+rules can verify the pairing link at
+`parents/{parentUid}/children/{childId}` (including that its `childUid`
+matches `{deviceId}`). Allow only the linked parent to write stream commands
+at `devices/{deviceId}/control`, and allow the matching child account to read
+commands and write their acknowledgement at that path. Verify the command's
+`parentUid`, `childId`, and `deviceId` against the paired record. Firebase
+Authentication alone does not secure database paths; do not enable
+unrestricted database access.
+
+Run the parent web app with values from your Firebase project's web app
+settings and Realtime Database page:
 
 ```sh
-flutter run -d chrome \
+flutter run -d chrome --target lib/main_parent.dart \
 	--dart-define=FIREBASE_API_KEY=... \
 	--dart-define=FIREBASE_APP_ID=... \
 	--dart-define=FIREBASE_MESSAGING_SENDER_ID=... \
@@ -39,10 +78,18 @@ flutter run -d chrome \
 	--dart-define=FIREBASE_AUTH_DOMAIN=...
 ```
 
-Enable the Email/Password provider in Firebase Authentication before using the
-login or registration screens. `FIREBASE_AUTH_DOMAIN` is optional. Configure
-Realtime Database rules for authenticated access to `pairing_codes` and
-authenticated parent access to that parent's
-`parents/{parentUid}/children` records. Do not enable unrestricted database
-access. Firebase web configuration values identify the project and are not
-server credentials.
+The same parent app runs on Android, for example:
+
+```sh
+flutter run -d <android-device> --target lib/main.dart \
+	--dart-define=FIREBASE_API_KEY=... \
+	--dart-define=FIREBASE_APP_ID=... \
+	--dart-define=FIREBASE_MESSAGING_SENDER_ID=... \
+	--dart-define=FIREBASE_PROJECT_ID=... \
+	--dart-define=FIREBASE_DATABASE_URL=...
+```
+
+Use `lib/main_child.dart` to run the child web app with the same Firebase
+configuration flags. Enable the Email/Password provider in Firebase
+Authentication for both apps. `FIREBASE_AUTH_DOMAIN` is optional. Firebase web
+configuration values identify the project and are not server credentials.

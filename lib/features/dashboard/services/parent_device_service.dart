@@ -15,6 +15,31 @@ class ParentDeviceService {
   final FirebaseDatabase _database;
   final String _parentUid;
 
+  Future<void> unlinkChildDevice(
+    String? childId, {
+    String? deviceKey,
+  }) async {
+    if (!_isValidDatabaseKey(_parentUid)) {
+      throw StateError('The signed-in parent ID is not a valid database key.');
+    }
+    final recordKey =
+        childId != null && _isValidDatabaseKey(childId) ? childId : deviceKey;
+    if (recordKey == null || !_isValidDatabaseKey(recordKey)) {
+      throw ArgumentError.value(
+        childId ?? deviceKey,
+        'childId',
+        'A valid childId or deviceKey is required.',
+      );
+    }
+
+    final childPath = 'parents/$_parentUid/children/$recordKey';
+    await _logDatabaseOperation(
+      'unlink child device',
+      childPath,
+      () => _database.ref(childPath).remove(),
+    );
+  }
+
   Future<ParentChildDevice> claimPairingCode(String input) async {
     final code = input.trim();
     if (!RegExp(r'^(?:\d{4}|\d{6})$').hasMatch(code)) {
@@ -28,16 +53,40 @@ class ParentDeviceService {
     }
 
     try {
-      final pairingPath = 'pairing_codes/$code';
-      final pairingReference = _database.ref(pairingPath);
+      const pairingRootPath = 'pairing_codes';
+      final pairingRoot = _database.ref(pairingRootPath);
       debugPrint(
-        'Reading pairing code at Firebase path: ${pairingReference.path}',
+        'Searching pairing codes at Firebase path: ${pairingRoot.path}',
       );
-      final pairingSnapshot = await _logDatabaseOperation(
-        'read pairing code',
-        pairingPath,
-        pairingReference.get,
+      final matchingSnapshot = await _logDatabaseOperation(
+        'find pairing code',
+        pairingRootPath,
+        () => pairingRoot.orderByChild('pairingCode').equalTo(code).get(),
       );
+      if (matchingSnapshot.children.length > 1) {
+        throw StateError(
+          'Pairing code is ambiguous. Generate a new code on the child device.',
+        );
+      }
+
+      late final DataSnapshot pairingSnapshot;
+      late final String pairingPath;
+      if (matchingSnapshot.children.isNotEmpty) {
+        pairingSnapshot = matchingSnapshot.children.single;
+        final deviceId = pairingSnapshot.key;
+        if (deviceId == null || !_isValidDatabaseKey(deviceId)) {
+          throw StateError('Pairing record has an invalid deviceId.');
+        }
+        pairingPath = '$pairingRootPath/$deviceId';
+      } else {
+        pairingPath = '$pairingRootPath/$code';
+        pairingSnapshot = await _logDatabaseOperation(
+          'read legacy pairing code',
+          pairingPath,
+          () => _database.ref(pairingPath).get(),
+        );
+      }
+
       final pairingValue = pairingSnapshot.value;
       debugPrint(
         'Pairing code read completed at $pairingPath; '
@@ -48,7 +97,8 @@ class ParentDeviceService {
       }
       final pairingDevice = ParentChildDevice.fromMap(pairingValue);
       if (pairingDevice.pairingCode != code ||
-          pairingDevice.status != 'waiting') {
+          (pairingDevice.status != 'pending' &&
+              pairingDevice.status != 'waiting')) {
         throw StateError(
           'Pairing code is invalid, expired, or already claimed.',
         );
@@ -63,24 +113,37 @@ class ParentDeviceService {
         );
       }
 
-      final childPath =
-          'parents/$_parentUid/children/${pairingDevice.childId}';
+      final childPath = 'parents/$_parentUid/children/${pairingDevice.childId}';
+      final pairedAt = DateTime.now().toUtc().toIso8601String();
       final device = ParentChildDevice(
         childId: pairingDevice.childId,
         pairingCode: pairingDevice.pairingCode,
         status: 'paired',
-        timestamp: DateTime.now().toUtc().toIso8601String(),
+        timestamp: pairedAt,
+        deviceId: pairingDevice.deviceId ?? pairingDevice.childUid,
+        childUid: pairingDevice.childUid,
       );
       debugPrint(
-        'Atomically linking child at $childPath and consuming code '
+        'Atomically linking child at $childPath and marking code claimed '
         'at $pairingPath',
       );
       await _logDatabaseOperation(
-        'atomically link child and consume pairing code',
+        'atomically link child and mark pairing code claimed',
         '$childPath, $pairingPath',
         () => _database.ref().update({
           childPath: device.toMap(),
-          pairingPath: null,
+          pairingPath: {
+            'deviceId': pairingSnapshot.key ?? pairingDevice.childId,
+            'childId': pairingDevice.childId,
+            if (pairingDevice.childUid != null)
+              'childUid': pairingDevice.childUid,
+            'pairingCode': pairingDevice.pairingCode,
+            'parentUid': _parentUid,
+            'status': 'paired',
+            'createdAt': pairingDevice.timestamp,
+            'lastSeen': pairedAt,
+            'timestamp': pairingDevice.timestamp,
+          },
         }),
       );
 

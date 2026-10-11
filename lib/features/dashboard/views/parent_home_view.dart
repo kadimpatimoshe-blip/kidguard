@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'add_child_view.dart';
 import 'dashboard_view.dart';
 
-class ParentHomeView extends StatelessWidget {
+class ParentHomeView extends StatefulWidget {
   const ParentHomeView({
     required this.auth,
     required this.database,
@@ -18,9 +18,24 @@ class ParentHomeView extends StatelessWidget {
   final String parentUid;
 
   @override
+  State<ParentHomeView> createState() => _ParentHomeViewState();
+}
+
+class _ParentHomeViewState extends State<ParentHomeView> {
+  bool _hasPairedDevice = false;
+
+  @override
+  void didUpdateWidget(covariant ParentHomeView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.parentUid != widget.parentUid) {
+      _hasPairedDevice = false;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final childrenReference =
-        database.ref('/parents/$parentUid/children');
+        widget.database.ref('/parents/${widget.parentUid}/children');
 
     return StreamBuilder<DatabaseEvent>(
       stream: childrenReference.onValue,
@@ -46,16 +61,20 @@ class ParentHomeView extends StatelessWidget {
 
         final value = snapshot.data!.snapshot.value;
         if (value is Map && value.isNotEmpty) {
+          _hasPairedDevice = true;
+        }
+
+        if (_hasPairedDevice) {
           return DashboardView(
-            auth: auth,
-            database: database,
-            parentUid: parentUid,
+            auth: widget.auth,
+            database: widget.database,
+            parentUid: widget.parentUid,
           );
         }
 
         return AddChildView(
-          database: database,
-          parentUid: parentUid,
+          database: widget.database,
+          parentUid: widget.parentUid,
         );
       },
     );

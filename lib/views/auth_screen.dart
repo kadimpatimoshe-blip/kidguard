@@ -5,11 +5,13 @@ class AuthScreen extends StatefulWidget {
   const AuthScreen({
     required this.auth,
     this.showChildModeAction = true,
+    this.parentLogin = false,
     super.key,
   });
 
   final FirebaseAuth auth;
   final bool showChildModeAction;
+  final bool parentLogin;
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -103,15 +105,21 @@ class _AuthScreenState extends State<AuthScreen> {
                           size: 48, color: colors.primary),
                       const SizedBox(height: 20),
                       Text(
-                        _isRegistering ? 'Create your account' : 'Welcome back',
+                        widget.parentLogin
+                            ? 'Parent Login'
+                            : _isRegistering
+                                ? 'Create your account'
+                                : 'Welcome back',
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.headlineMedium,
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        _isRegistering
-                            ? 'Register to continue to device pairing.'
-                            : 'Log in to continue to device pairing.',
+                        widget.parentLogin
+                            ? 'Log in with the parent account to pair this device.'
+                            : _isRegistering
+                                ? 'Register to continue to device pairing.'
+                                : 'Log in to continue to device pairing.',
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodyLarge,
                       ),
@@ -183,14 +191,15 @@ class _AuthScreenState extends State<AuthScreen> {
                               )
                             : Text(_isRegistering ? 'Register' : 'Log in'),
                       ),
-                      TextButton(
-                        onPressed: _isSubmitting ? null : _toggleMode,
-                        child: Text(
-                          _isRegistering
-                              ? 'Already have an account? Log in'
-                              : 'New to KidGuard? Register',
+                      if (!widget.parentLogin)
+                        TextButton(
+                          onPressed: _isSubmitting ? null : _toggleMode,
+                          child: Text(
+                            _isRegistering
+                                ? 'Already have an account? Log in'
+                                : 'New to KidGuard? Register',
+                          ),
                         ),
-                      ),
                       if (widget.showChildModeAction)
                         OutlinedButton.icon(
                           onPressed: () =>

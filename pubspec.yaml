@@ -25,7 +25,7 @@ dependencies:
   fl_chart: ^1.2.0
 
   # Live Camera & Audio / Screen Mirroring Streaming
-  flutter_webrtc: ^0.9.48
+  flutter_webrtc: ^1.6.2
 
   # Permissions handling for Call logs, Camera, Storage, etc.
   permission_handler: ^11.3.1
