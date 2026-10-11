@@ -1,1 +1,0 @@
-{"inputs":["/workspaces/kidguard/web/*/index.html","/workspaces/kidguard/web/flutter_bootstrap.js","/workspaces/kidguard/flutter/bin/cache/engine.stamp"],"outputs":["/workspaces/kidguard/build/web/*/index.html","/workspaces/kidguard/build/web/flutter_bootstrap.js"],"buildKey":"[{\"compileTarget\":\"dart2js\",\"renderer\":\"canvaskit\",\"mainJsPath\":\"main.dart.js\"}]"}
