@@ -34,4 +34,3 @@ jobs:
         with:
           name: child-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-        
