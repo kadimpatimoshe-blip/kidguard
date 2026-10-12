@@ -1,12 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:usage_stats/usage_stats.dart';
 
 import 'firebase_config.dart';
 import 'webrtc_service.dart';
@@ -15,6 +19,11 @@ class ChildStreamBackgroundService {
   static const _deviceIdKey = 'kidguard_stream_device_id';
   static const _parentUidKey = 'kidguard_stream_parent_uid';
   static const _childIdKey = 'kidguard_stream_child_id';
+  static const _locationEnabledKey = 'kidguard_location_enabled';
+  static const _callLogsEnabledKey = 'kidguard_call_logs_enabled';
+  static const _appUsageEnabledKey = 'kidguard_app_usage_enabled';
+  static const _screenCaptureActiveKey = 'kidguard_screen_capture_active';
+  static const _monitoringChannel = MethodChannel('com.kidguard/monitoring');
 
   static Future<void> start({
     required String deviceId,
@@ -30,6 +39,11 @@ class ChildStreamBackgroundService {
     await preferences.setString(_deviceIdKey, deviceId);
     await preferences.setString(_parentUidKey, parentUid);
     await preferences.setString(_childIdKey, childId);
+
+    configuration.addAll({
+      'locationEnabled': preferences.getBool(_locationEnabledKey) ?? false,
+      'appUsageEnabled': preferences.getBool(_appUsageEnabledKey) ?? false,
+    });
 
     final service = FlutterBackgroundService();
     if (await service.isRunning()) {
@@ -53,7 +67,7 @@ class ChildStreamBackgroundService {
       androidConfiguration: AndroidConfiguration(
         onStart: childStreamServiceEntrypoint,
         autoStart: false,
-        autoStartOnBoot: false,
+        autoStartOnBoot: true,
         isForegroundMode: true,
         initialNotificationTitle: 'KidGuard is ready',
         initialNotificationContent:
@@ -77,6 +91,89 @@ class ChildStreamBackgroundService {
         result?['error'] as String? ??
             'The Android camera streaming service failed to initialize.',
       );
+    }
+  }
+
+  static Future<void> setScreenCaptureActive(bool active) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setBool(_screenCaptureActiveKey, active);
+  }
+
+  static Future<void> configureMonitoring({
+    required bool locationEnabled,
+    required bool callLogsEnabled,
+    required bool appUsageEnabled,
+  }) async {
+    final preferences = await SharedPreferences.getInstance();
+    final previousLocationEnabled =
+        preferences.getBool(_locationEnabledKey) ?? false;
+    final previousCallLogsEnabled =
+        preferences.getBool(_callLogsEnabledKey) ?? false;
+    final previousAppUsageEnabled =
+        preferences.getBool(_appUsageEnabledKey) ?? false;
+    await preferences.setBool(_locationEnabledKey, locationEnabled);
+    await preferences.setBool(_callLogsEnabledKey, callLogsEnabled);
+    await preferences.setBool(_appUsageEnabledKey, appUsageEnabled);
+
+    try {
+      await _monitoringChannel.invokeMethod<void>(
+        'setCallLogSyncEnabled',
+        {'enabled': callLogsEnabled},
+      );
+      final service = FlutterBackgroundService();
+      if (await service.isRunning()) {
+        final deviceId = preferences.getString(_deviceIdKey);
+        final parentUid = preferences.getString(_parentUidKey);
+        final childId = preferences.getString(_childIdKey);
+        if (deviceId == null || parentUid == null || childId == null) {
+          throw StateError('Paired child-device details are not available.');
+        }
+        final configured = service
+            .on('configured')
+            .firstWhere((event) => event?['deviceId'] == deviceId)
+            .timeout(const Duration(seconds: 15));
+        service.invoke('configure', {
+          'deviceId': deviceId,
+          'parentUid': parentUid,
+          'childId': childId,
+          'locationEnabled': locationEnabled,
+          'appUsageEnabled': appUsageEnabled,
+        });
+        final result = await configured;
+        if (result?['success'] != true) {
+          throw StateError(
+            result?['error'] as String? ??
+                'The child monitoring service could not be configured.',
+          );
+        }
+      }
+    } catch (error, stackTrace) {
+      Object? nativeRollbackError;
+      try {
+        await _monitoringChannel.invokeMethod<void>(
+          'setCallLogSyncEnabled',
+          {'enabled': previousCallLogsEnabled},
+        );
+      } catch (rollbackError, rollbackStackTrace) {
+        nativeRollbackError = rollbackError;
+        debugPrint(
+          'Could not restore native call log sync state: $rollbackError',
+        );
+        debugPrintStack(stackTrace: rollbackStackTrace);
+      }
+      await preferences.setBool(_locationEnabledKey, previousLocationEnabled);
+      await preferences.setBool(_callLogsEnabledKey, previousCallLogsEnabled);
+      await preferences.setBool(_appUsageEnabledKey, previousAppUsageEnabled);
+      if (nativeRollbackError != null) {
+        Error.throwWithStackTrace(
+          StateError(
+            'Monitoring configuration failed: $error. '
+            'Restoring call log sync also failed: $nativeRollbackError.',
+          ),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     }
   }
 }
@@ -118,6 +215,12 @@ Future<void> childStreamServiceEntrypoint(ServiceInstance service) async {
       'deviceId': deviceId,
       'parentUid': parentUid,
       'childId': childId,
+      'locationEnabled': preferences
+              .getBool(ChildStreamBackgroundService._locationEnabledKey) ??
+          false,
+      'appUsageEnabled': preferences
+              .getBool(ChildStreamBackgroundService._appUsageEnabledKey) ??
+          false,
     });
     service.invoke('ready', {'success': true});
   } catch (error, stackTrace) {
@@ -154,7 +257,9 @@ class _ChildStreamCommandRunner {
   StreamSubscription<DatabaseEvent>? _controlSubscription;
   StreamSubscription<DatabaseEvent>? _deviceSubscription;
   StreamSubscription<DatabaseEvent>? _connectionSubscription;
+  StreamSubscription<Position>? _locationSubscription;
   Timer? _presenceHeartbeatTimer;
+  Timer? _appUsageSyncTimer;
   Future<void> _commandQueue = Future<void>.value();
   DatabaseReference? _presenceReference;
   String? _deviceId;
@@ -162,6 +267,9 @@ class _ChildStreamCommandRunner {
   String? _childId;
   bool _disposed = false;
   bool _databaseConnected = false;
+  bool _locationEnabled = false;
+  bool _appUsageEnabled = false;
+  bool _syncingAppUsage = false;
 
   Future<void> configure(Map<String, dynamic>? configuration) async {
     final deviceId = configuration?['deviceId'];
@@ -185,6 +293,7 @@ class _ChildStreamCommandRunner {
         _parentUid == parentUid &&
         _childId == childId &&
         _controlSubscription != null) {
+      await _configureMonitoring(configuration ?? const {});
       _service.invoke('configured', {
         'deviceId': deviceId,
         'success': true,
@@ -233,6 +342,7 @@ class _ChildStreamCommandRunner {
           }
         },
       );
+      await _configureMonitoring(configuration ?? const {});
       _service.invoke('configured', {
         'deviceId': deviceId,
         'success': true,
@@ -245,6 +355,109 @@ class _ChildStreamCommandRunner {
         'error': error.toString(),
       });
     }
+  }
+
+  Future<void> _configureMonitoring(Map<String, dynamic> configuration) async {
+    await _locationSubscription?.cancel();
+    _locationSubscription = null;
+    _appUsageSyncTimer?.cancel();
+
+    _locationEnabled = configuration['locationEnabled'] == true;
+    _appUsageEnabled = configuration['appUsageEnabled'] == true;
+    if (_locationEnabled) {
+      final permission = await Geolocator.checkPermission();
+      if (permission != LocationPermission.always) {
+        throw StateError(
+          'Background location sharing requires Allow all the time access.',
+        );
+      }
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        throw StateError('Enable Location services to share device location.');
+      }
+      _locationSubscription = Geolocator.getPositionStream(
+        locationSettings: AndroidSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 15,
+          intervalDuration: Duration(seconds: 30),
+          foregroundNotificationConfig: const ForegroundNotificationConfig(
+            notificationTitle: 'KidGuard location sharing',
+            notificationText:
+                'Your location is being shared with the paired parent.',
+            enableWakeLock: true,
+            setOngoing: true,
+          ),
+        ),
+      ).listen(_syncLocation, onError: _reportError);
+    }
+    if (_appUsageEnabled) {
+      unawaited(_syncAppUsage());
+      _appUsageSyncTimer = Timer.periodic(
+        const Duration(minutes: 15),
+        (_) => unawaited(_syncAppUsage()),
+      );
+    }
+  }
+
+  Future<void> _syncLocation(Position position) async {
+    if (!_locationEnabled || !_databaseConnected || _disposed) return;
+    try {
+      await _pairedChildReference.child('location').set({
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+        'accuracy': position.accuracy,
+        'altitude': position.altitude,
+        'speed': position.speed,
+        'heading': position.heading,
+        'capturedAt': ServerValue.timestamp,
+        'deviceTimestamp': position.timestamp.millisecondsSinceEpoch,
+      });
+    } catch (error, stackTrace) {
+      _reportError(error, stackTrace);
+    }
+  }
+
+  Future<void> _syncAppUsage() async {
+    if (!_appUsageEnabled ||
+        !_databaseConnected ||
+        _disposed ||
+        _syncingAppUsage) {
+      return;
+    }
+    _syncingAppUsage = true;
+    try {
+      if (await UsageStats.checkUsagePermission() != true) {
+        throw StateError('App Usage access is no longer enabled.');
+      }
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final usage = await UsageStats.queryAndAggregateUsageStats(today, now);
+      final usageReference = _pairedChildReference.child('appUsage');
+      for (final entry in usage.entries) {
+        final packageName = entry.key;
+        if (packageName.isEmpty) continue;
+        final packageKey =
+            base64Url.encode(utf8.encode(packageName)).replaceAll('=', '');
+        await usageReference.child(packageKey).set({
+          'packageName': packageName,
+          'foregroundTimeMs': entry.value.totalTimeInForegroundMs,
+          'lastTimeUsed': entry.value.lastTimeUsedDate?.millisecondsSinceEpoch,
+          'date': today.toIso8601String().substring(0, 10),
+          'updatedAt': ServerValue.timestamp,
+        });
+      }
+    } catch (error, stackTrace) {
+      _reportError(error, stackTrace);
+    } finally {
+      _syncingAppUsage = false;
+    }
+  }
+
+  DatabaseReference get _pairedChildReference {
+    final reference = _presenceReference?.parent;
+    if (reference == null) {
+      throw StateError('The paired child reference has not been configured.');
+    }
+    return reference;
   }
 
   Future<void> _confirmPairedDevice() async {
@@ -301,7 +514,22 @@ class _ChildStreamCommandRunner {
       if (!_isPairedDeviceRecord(childRecord.value)) {
         throw StateError('The parent device is no longer paired.');
       }
-      await _executeRemoteCommand(value['command'] as String);
+      if (value['command'] == 'startStream') {
+        final preferences = await SharedPreferences.getInstance();
+        if (preferences.getBool(
+              ChildStreamBackgroundService._screenCaptureActiveKey,
+            ) ==
+            true) {
+          throw StateError(
+            'Stop child-approved screen sharing before starting Live Camera.',
+          );
+        }
+      }
+      final cameraFacing = value['cameraFacing'];
+      await _executeRemoteCommand(
+        value['command'] as String,
+        cameraFacing: cameraFacing is String ? cameraFacing : null,
+      );
     } catch (error, stackTrace) {
       status = 'failed';
       message = error.toString();
@@ -322,7 +550,10 @@ class _ChildStreamCommandRunner {
     }
   }
 
-  Future<void> _executeRemoteCommand(String command) async {
+  Future<void> _executeRemoteCommand(
+    String command, {
+    String? cameraFacing,
+  }) async {
     switch (command) {
       case 'startStream':
         try {
@@ -357,7 +588,12 @@ class _ChildStreamCommandRunner {
           content: 'Waiting for a parent-authorized stream request.',
         );
       case 'switchCamera':
-        await _webRTCService.switchCamera();
+        final frontFacing = switch (cameraFacing) {
+          'front' => true,
+          'back' => false,
+          _ => null,
+        };
+        await _webRTCService.switchCamera(frontFacing: frontFacing);
       case 'toggleAudioMute':
         final muted = await _webRTCService.toggleAudioMute();
         _service.invoke('streamState', {
@@ -378,6 +614,15 @@ class _ChildStreamCommandRunner {
       await preferences.remove(ChildStreamBackgroundService._deviceIdKey);
       await preferences.remove(ChildStreamBackgroundService._parentUidKey);
       await preferences.remove(ChildStreamBackgroundService._childIdKey);
+      await preferences
+          .remove(ChildStreamBackgroundService._locationEnabledKey);
+      await preferences
+          .remove(ChildStreamBackgroundService._callLogsEnabledKey);
+      await preferences
+          .remove(ChildStreamBackgroundService._appUsageEnabledKey);
+      await preferences.remove(
+        ChildStreamBackgroundService._screenCaptureActiveKey,
+      );
     } catch (error, stackTrace) {
       _reportError(error, stackTrace);
     } finally {
@@ -391,7 +636,9 @@ class _ChildStreamCommandRunner {
     await _controlSubscription?.cancel();
     await _deviceSubscription?.cancel();
     await _connectionSubscription?.cancel();
+    await _locationSubscription?.cancel();
     _presenceHeartbeatTimer?.cancel();
+    _appUsageSyncTimer?.cancel();
     await _webRTCService.dispose();
   }
 

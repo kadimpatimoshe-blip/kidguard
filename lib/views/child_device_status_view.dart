@@ -1,11 +1,15 @@
 import 'dart:async';
 
 import 'package:firebase_database/firebase_database.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:usage_stats/usage_stats.dart';
 
 import '../services/child_stream_background_service.dart';
 import '../services/webrtc_service.dart';
@@ -33,6 +37,10 @@ class ChildDeviceStatusView extends StatefulWidget {
 class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
     with WidgetsBindingObserver {
   static const _heartbeatInterval = Duration(seconds: 30);
+  static const _monitoringChannel = MethodChannel('com.kidguard/monitoring');
+  static const _locationEnabledKey = 'kidguard_location_enabled';
+  static const _callLogsEnabledKey = 'kidguard_call_logs_enabled';
+  static const _appUsageEnabledKey = 'kidguard_app_usage_enabled';
 
   late final DatabaseReference _deviceReference;
   late final DatabaseReference _presenceReference;
@@ -56,8 +64,17 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
   bool _backgroundServiceReady = false;
   bool _permissionFlowInProgress = false;
   bool _streamAudioMuted = false;
+  bool _locationSharingEnabled = false;
+  bool _callLogSyncEnabled = false;
+  bool _appUsageSyncEnabled = false;
+  bool _notificationAccessGranted = false;
+  bool _usageAccessGranted = false;
+  bool _startingScreenMirror = false;
+  bool _screenMirrorActive = false;
   String? _streamError;
   String? _syncError;
+  String? _featureError;
+  Future<AndroidDeviceInfo?>? _androidDeviceInfoFuture;
 
   @override
   void initState() {
@@ -68,11 +85,16 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
       },
       onConnectionState: (state) {
         if (!mounted) return;
+        final active =
+            state != RTCPeerConnectionState.RTCPeerConnectionStateClosed &&
+                state != RTCPeerConnectionState.RTCPeerConnectionStateFailed;
         setState(() {
-          _streamActive =
-              state != RTCPeerConnectionState.RTCPeerConnectionStateClosed &&
-                  state != RTCPeerConnectionState.RTCPeerConnectionStateFailed;
+          _streamActive = active;
+          if (!active) _screenMirrorActive = false;
         });
+        if (!active) {
+          unawaited(ChildStreamBackgroundService.setScreenCaptureActive(false));
+        }
       },
     );
     unawaited(_prepareSignalingRecord());
@@ -94,6 +116,7 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
         if (!mounted || event == null) return;
         setState(() {
           _streamActive = event['active'] == true;
+          _screenMirrorActive = false;
           if (event['audioMuted'] is bool) {
             _streamAudioMuted = event['audioMuted'] as bool;
           }
@@ -105,6 +128,7 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
         setState(() => _streamError = event!['error'] as String);
       });
       unawaited(_requestPermissionsAndStartBackgroundService());
+      unawaited(_refreshMonitoringAccess());
     }
     _connectionSubscription =
         widget.database.ref('.info/connected').onValue.listen(
@@ -146,6 +170,11 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
     _appActive = state == AppLifecycleState.resumed;
     if (_appActive &&
         !kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android) {
+      unawaited(_refreshMonitoringAccess());
+    }
+    if (_appActive &&
+        !kIsWeb &&
         defaultTargetPlatform == TargetPlatform.android &&
         !_backgroundServiceReady) {
       unawaited(
@@ -159,6 +188,274 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
     } else {
       unawaited(_markOffline());
     }
+  }
+
+  Future<void> _refreshMonitoringAccess() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      final notificationAccess =
+          await _monitoringChannel.invokeMethod<bool>('hasNotificationAccess');
+      final usageAccess = await UsageStats.checkUsagePermission() ?? false;
+      await _monitoringChannel.invokeMethod<void>(
+        'configureNotificationSync',
+        {
+          'deviceId': widget.deviceId,
+          'parentUid': widget.parentUid,
+          'childId': widget.childId,
+        },
+      );
+      final callLogsEnabled =
+          preferences.getBool(_callLogsEnabledKey) ?? false;
+      if (callLogsEnabled) {
+        await _monitoringChannel.invokeMethod<void>(
+          'setCallLogSyncEnabled',
+          {'enabled': true},
+        );
+      }
+      if (mounted) {
+        setState(() {
+          _notificationAccessGranted = notificationAccess == true;
+          _usageAccessGranted = usageAccess;
+          _locationSharingEnabled =
+              preferences.getBool(_locationEnabledKey) ?? false;
+          _callLogSyncEnabled =
+              preferences.getBool(_callLogsEnabledKey) ?? false;
+          _appUsageSyncEnabled =
+              preferences.getBool(_appUsageEnabledKey) ?? false;
+        });
+      }
+    } catch (error, stackTrace) {
+      _handleFeatureError(
+          'Could not load monitoring permissions', error, stackTrace);
+    }
+  }
+
+  Future<void> _openNotificationSettings() async {
+    try {
+      await _monitoringChannel
+          .invokeMethod<void>('openNotificationAccessSettings');
+    } catch (error, stackTrace) {
+      _handleFeatureError(
+        'Could not open notification access settings',
+        error,
+        stackTrace,
+      );
+    }
+  }
+
+  Widget _buildMonitoringControls(ColorScheme colors) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Child device monitoring',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Each feature is optional and uses Android permissions. '
+              'Location updates about every 30 seconds while enabled; call '
+              'history (including numbers, names, type, and duration) is read '
+              'only and syncs about every 15 minutes while enabled; Android '
+              'may delay background jobs. App usage syncs about every '
+              '15 minutes. Notifications sync after notification access is '
+              'enabled in Android settings. Screen sharing always requires '
+              'your approval in the Android system prompt.',
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: _locationSharingEnabled
+                  ? () => _setFeatureEnabled(
+                        feature: 'location',
+                        enabled: false,
+                      )
+                  : _enableLocationSharing,
+              child: Text(
+                _locationSharingEnabled
+                    ? 'Stop Live Location sharing'
+                    : 'Enable Live Location',
+              ),
+            ),
+            OutlinedButton(
+              onPressed: _callLogSyncEnabled
+                  ? () => _setFeatureEnabled(feature: 'calls', enabled: false)
+                  : _enableCallLogSync,
+              child: Text(
+                _callLogSyncEnabled ? 'Stop Call Log sync' : 'Enable Call Logs',
+              ),
+            ),
+            OutlinedButton(
+              onPressed: _appUsageSyncEnabled
+                  ? () => _setFeatureEnabled(feature: 'usage', enabled: false)
+                  : _enableAppUsageSync,
+              child: Text(
+                _appUsageSyncEnabled
+                    ? 'Stop App Usage sync'
+                    : _usageAccessGranted
+                        ? 'Enable App Usage'
+                        : 'Grant App Usage access',
+              ),
+            ),
+            OutlinedButton(
+              onPressed: _openNotificationSettings,
+              child: Text(
+                _notificationAccessGranted
+                    ? 'Manage notification access (enabled)'
+                    : 'Enable notification sharing',
+              ),
+            ),
+            if (_streamActive && _screenMirrorActive)
+              FilledButton(
+                onPressed: _stopScreenMirror,
+                child: const Text('Stop Screen Sharing'),
+              )
+            else
+              FilledButton.tonal(
+                onPressed: _startingScreenMirror || _streamActive
+                    ? null
+                    : _startScreenMirror,
+                child: Text(
+                  _startingScreenMirror
+                      ? 'Waiting for Android screen-sharing approval…'
+                      : 'Start Screen Sharing',
+                ),
+              ),
+            if (_streamActive && _screenMirrorActive)
+              Text(
+                'Your screen is currently being shared with the paired parent.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: colors.error),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _enableLocationSharing() async {
+    try {
+      var permission = await Permission.locationWhenInUse.request();
+      if (!permission.isGranted) {
+        throw StateError('Location permission was not granted.');
+      }
+      permission = await Permission.locationAlways.request();
+      if (!permission.isGranted) {
+        throw StateError(
+          'Allow all the time location access in Android app settings '
+          'to enable background location sharing.',
+        );
+      }
+      await ChildStreamBackgroundService.configureMonitoring(
+        locationEnabled: true,
+        callLogsEnabled: _callLogSyncEnabled,
+        appUsageEnabled: _appUsageSyncEnabled,
+      );
+      if (mounted) {
+        setState(() {
+          _locationSharingEnabled = true;
+          _featureError = null;
+        });
+      }
+    } catch (error, stackTrace) {
+      _handleFeatureError(
+          'Could not enable location sharing', error, stackTrace);
+    }
+  }
+
+  Future<void> _enableCallLogSync() async {
+    try {
+      final permissionGranted = await _monitoringChannel
+              .invokeMethod<bool>('requestCallLogPermission') ??
+          false;
+      if (!permissionGranted) {
+        throw StateError(
+          'Call log access is required to enable call history syncing.',
+        );
+      }
+      await ChildStreamBackgroundService.configureMonitoring(
+        locationEnabled: _locationSharingEnabled,
+        callLogsEnabled: true,
+        appUsageEnabled: _appUsageSyncEnabled,
+      );
+      if (mounted) {
+        setState(() {
+          _callLogSyncEnabled = true;
+          _featureError = null;
+        });
+      }
+    } catch (error, stackTrace) {
+      _handleFeatureError('Could not enable call log sync', error, stackTrace);
+    }
+  }
+
+  Future<void> _openUsageSettings() async {
+    try {
+      await UsageStats.openUsageAccessSettings();
+    } catch (error, stackTrace) {
+      _handleFeatureError(
+          'Could not open App Usage settings', error, stackTrace);
+    }
+  }
+
+  Future<void> _enableAppUsageSync() async {
+    try {
+      final accessGranted = await UsageStats.checkUsagePermission() ?? false;
+      if (!accessGranted) {
+        await _openUsageSettings();
+        return;
+      }
+      await ChildStreamBackgroundService.configureMonitoring(
+        locationEnabled: _locationSharingEnabled,
+        callLogsEnabled: _callLogSyncEnabled,
+        appUsageEnabled: true,
+      );
+      if (mounted) {
+        setState(() {
+          _usageAccessGranted = true;
+          _appUsageSyncEnabled = true;
+          _featureError = null;
+        });
+      }
+    } catch (error, stackTrace) {
+      _handleFeatureError('Could not enable App Usage sync', error, stackTrace);
+    }
+  }
+
+  Future<void> _setFeatureEnabled({
+    required String feature,
+    required bool enabled,
+  }) async {
+    try {
+      await ChildStreamBackgroundService.configureMonitoring(
+        locationEnabled:
+            feature == 'location' ? enabled : _locationSharingEnabled,
+        callLogsEnabled: feature == 'calls' ? enabled : _callLogSyncEnabled,
+        appUsageEnabled: feature == 'usage' ? enabled : _appUsageSyncEnabled,
+      );
+      if (!mounted) return;
+      setState(() {
+        if (feature == 'location') _locationSharingEnabled = enabled;
+        if (feature == 'calls') _callLogSyncEnabled = enabled;
+        if (feature == 'usage') _appUsageSyncEnabled = enabled;
+        _featureError = null;
+      });
+    } catch (error, stackTrace) {
+      _handleFeatureError(
+          'Could not update $feature sharing', error, stackTrace);
+    }
+  }
+
+  void _handleFeatureError(
+    String message,
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    debugPrint('$message: $error');
+    debugPrintStack(stackTrace: stackTrace);
+    if (mounted) setState(() => _featureError = '$message: $error');
   }
 
   Future<void> _handleConnection(DatabaseEvent event) async {
@@ -234,7 +531,11 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
         if (!_canSyncDevice) {
           throw StateError('The parent device is no longer paired.');
         }
-        await _executeRemoteCommand(value['command'] as String);
+        final cameraFacing = value['cameraFacing'];
+        await _executeRemoteCommand(
+          value['command'] as String,
+          cameraFacing: cameraFacing is String ? cameraFacing : null,
+        );
       } catch (error, stackTrace) {
         status = 'failed';
         message = error.toString();
@@ -258,7 +559,10 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
     });
   }
 
-  Future<void> _executeRemoteCommand(String command) async {
+  Future<void> _executeRemoteCommand(
+    String command, {
+    String? cameraFacing,
+  }) async {
     switch (command) {
       case 'startStream':
         if (kIsWeb && !_appActive) {
@@ -269,7 +573,12 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
       case 'stopStream':
         await _stopLiveStream(rethrowOnError: true);
       case 'switchCamera':
-        await _webRTCService.switchCamera();
+        final frontFacing = switch (cameraFacing) {
+          'front' => true,
+          'back' => false,
+          _ => null,
+        };
+        await _webRTCService.switchCamera(frontFacing: frontFacing);
       case 'toggleAudioMute':
         final muted = await _webRTCService.toggleAudioMute();
         if (mounted) setState(() => _streamAudioMuted = muted);
@@ -310,15 +619,37 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
   Future<void> _syncTelemetry([AppLifecycleState? state]) async {
     if (!_canSyncDevice) return;
     try {
+      final androidInfo =
+          await (_androidDeviceInfoFuture ??= _readAndroidDeviceInfo());
+      final manufacturer = androidInfo?.manufacturer.trim();
+      final model = androidInfo?.model.trim();
+      final deviceModelName = [
+        if (manufacturer != null && manufacturer.isNotEmpty) manufacturer,
+        if (model != null && model.isNotEmpty) model,
+      ].join(' ');
       await _telemetryReference.update({
         'platform': kIsWeb ? 'web' : defaultTargetPlatform.name,
         'appState': (state ?? WidgetsBinding.instance.lifecycleState)?.name ??
             'unknown',
+        if (manufacturer != null && manufacturer.isNotEmpty)
+          'deviceManufacturer': manufacturer,
+        if (model != null && model.isNotEmpty) 'deviceModel': model,
+        if (deviceModelName.isNotEmpty) 'deviceModelName': deviceModelName,
         'updatedAt': ServerValue.timestamp,
       });
       if (mounted) setState(() => _syncError = null);
     } catch (error, stackTrace) {
       _handleSyncError(error, stackTrace);
+    }
+  }
+
+  Future<AndroidDeviceInfo?> _readAndroidDeviceInfo() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
+    try {
+      return await DeviceInfoPlugin().androidInfo;
+    } catch (error) {
+      debugPrint('Could not read Android device information: $error');
+      return null;
     }
   }
 
@@ -387,6 +718,7 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
       if (mounted) {
         setState(() {
           _streamActive = true;
+          _screenMirrorActive = false;
           _streamAudioMuted = false;
         });
       }
@@ -405,6 +737,50 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
     } finally {
       if (mounted) setState(() => _startingStream = false);
     }
+  }
+
+  Future<void> _startScreenMirror() async {
+    if (_startingScreenMirror || _streamActive) return;
+    setState(() {
+      _startingScreenMirror = true;
+      _streamError = null;
+    });
+    try {
+      await ChildStreamBackgroundService.setScreenCaptureActive(true);
+      await _webRTCService.startPublishing(
+        database: widget.database,
+        deviceId: widget.deviceId,
+        parentUid: widget.parentUid,
+        childId: widget.childId,
+        screenCapture: true,
+      );
+      if (mounted) {
+        setState(() {
+          _streamActive = true;
+          _screenMirrorActive = true;
+          _streamAudioMuted = true;
+        });
+      }
+    } catch (error, stackTrace) {
+      debugPrint('Could not start child screen mirroring: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      try {
+        await _webRTCService.dispose();
+      } catch (disposeError, disposeStackTrace) {
+        debugPrint('Could not clean up failed screen mirroring: $disposeError');
+        debugPrintStack(stackTrace: disposeStackTrace);
+      }
+      await ChildStreamBackgroundService.setScreenCaptureActive(false);
+      if (mounted) setState(() => _streamError = error.toString());
+    } finally {
+      if (mounted) setState(() => _startingScreenMirror = false);
+    }
+  }
+
+  Future<void> _stopScreenMirror() async {
+    await _stopLiveStream();
+    await ChildStreamBackgroundService.setScreenCaptureActive(false);
+    if (mounted) setState(() => _screenMirrorActive = false);
   }
 
   Future<void> _prepareSignalingRecord() async {
@@ -426,10 +802,12 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
   Future<void> _stopLiveStream({bool rethrowOnError = false}) async {
     setState(() {
       _streamActive = false;
+      _screenMirrorActive = false;
       _streamError = null;
     });
     try {
       await _webRTCService.dispose();
+      await ChildStreamBackgroundService.setScreenCaptureActive(false);
     } catch (error, stackTrace) {
       debugPrint('Could not stop child live stream: $error');
       debugPrintStack(stackTrace: stackTrace);
@@ -531,6 +909,14 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
                       textAlign: TextAlign.center,
                     ),
                   ],
+                  if (_featureError != null) ...[
+                    const SizedBox(height: 12),
+                    SelectableText(
+                      _featureError!,
+                      style: TextStyle(color: colors.error),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
                   if (_syncError != null) ...[
                     const SizedBox(height: 16),
                     SelectableText(
@@ -538,6 +924,11 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
                       style: TextStyle(color: colors.error),
                       textAlign: TextAlign.center,
                     ),
+                  ],
+                  if (!kIsWeb &&
+                      defaultTargetPlatform == TargetPlatform.android) ...[
+                    const SizedBox(height: 20),
+                    _buildMonitoringControls(colors),
                   ],
                 ],
               ),

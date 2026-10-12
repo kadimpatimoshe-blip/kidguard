@@ -27,7 +27,7 @@ dependencies:
   # Live Camera & Audio / Screen Mirroring Streaming
   flutter_webrtc: ^1.6.2
 
-  # Permissions handling for Call logs, Camera, Storage, etc.
+  # Permissions handling for Camera, Storage, etc.
   permission_handler: ^11.3.1
 
   # Local Database to store intercepted messages and notifications
@@ -35,6 +35,9 @@ dependencies:
   hive_flutter: ^1.1.0
   flutter_background_service: ^5.1.0
   shared_preferences: ^2.5.6
+  device_info_plus: ^13.3.0
+  geolocator: ^14.0.1
+  usage_stats: ^2.0.1
 
 dev_dependencies:
   flutter_test:

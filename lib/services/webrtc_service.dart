@@ -2,11 +2,15 @@ import 'dart:async';
 
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class WebRTCService {
   WebRTCService({this.onError, this.onConnectionState});
+
+  static const _screenProjectionChannel =
+      MethodChannel('com.kidguard/monitoring');
 
   static const _peerConfiguration = {
     'iceServers': [
@@ -40,6 +44,7 @@ class WebRTCService {
   bool _disposed = false;
   bool _audioMuted = false;
   bool _usingFrontCamera = true;
+  bool _screenCaptureForegroundStarted = false;
   Timer? _adaptationTimer;
   int _currentVideoProfile = 0;
   int _betterNetworkSamples = 0;
@@ -55,6 +60,7 @@ class WebRTCService {
     required String parentUid,
     required String childId,
     bool permissionsAlreadyGranted = false,
+    bool screenCapture = false,
   }) async {
     if (!_isValidDatabaseKey(deviceId) || !_isValidDatabaseKey(childId)) {
       throw ArgumentError.value(deviceId, 'deviceId', 'Invalid RTDB key.');
@@ -63,22 +69,39 @@ class WebRTCService {
     _disposed = false;
     _remoteDescriptionSet = false;
     _pendingRemoteCandidates.clear();
-    if (!kIsWeb && !permissionsAlreadyGranted) await _requestPermissions();
-    localStream = await navigator.mediaDevices.getUserMedia({
-      'audio': {
-        'echoCancellation': true,
-        'noiseSuppression': true,
-        'autoGainControl': true,
-      },
-      'video': {
-        'facingMode': 'user',
-        'width': {'ideal': 1280},
-        'height': {'ideal': 720},
-        'frameRate': {'ideal': 30},
-        'exposureMode': {'ideal': 'continuous'},
-        'whiteBalanceMode': {'ideal': 'continuous'},
-      },
-    });
+    if (!kIsWeb && !permissionsAlreadyGranted && !screenCapture) {
+      await _requestPermissions();
+    }
+    if (screenCapture && WebRTC.platformIsAndroid) {
+      if (!await Helper.requestCapturePermission()) {
+        throw StateError('Screen-sharing permission was not granted.');
+      }
+      await _screenProjectionChannel.invokeMethod<void>(
+        'startScreenProjectionService',
+      );
+      _screenCaptureForegroundStarted = true;
+    }
+    localStream = screenCapture
+        ? await navigator.mediaDevices.getDisplayMedia({
+            'video': true,
+            'audio': false,
+          })
+        : await navigator.mediaDevices.getUserMedia({
+            'audio': {
+              'echoCancellation': true,
+              'noiseSuppression': true,
+              'autoGainControl': true,
+            },
+            'video': {
+              'facingMode': 'user',
+              'width': {'ideal': 1280},
+              'height': {'ideal': 720},
+              'frameRate': {'ideal': 30},
+              'exposureMode': {'ideal': 'continuous'},
+              'whiteBalanceMode': {'ideal': 'continuous'},
+            },
+          });
+    _usingFrontCamera = !screenCapture;
     if (kIsWeb && localStream!.getVideoTracks().isNotEmpty) {
       _usingFrontCamera =
           localStream!.getVideoTracks().first.getSettings()['facingMode'] !=
@@ -367,12 +390,14 @@ class WebRTCService {
     return value.isNotEmpty && !RegExp(r'[.#$\[\]/]').hasMatch(value);
   }
 
-  Future<void> switchCamera() async {
+  Future<void> switchCamera({bool? frontFacing}) async {
     final stream = localStream;
     if (stream == null || stream.getVideoTracks().isEmpty) {
       throw StateError('Start a live stream before switching cameras.');
     }
     final videoTrack = stream.getVideoTracks().first;
+    final targetFront = frontFacing ?? !_usingFrontCamera;
+    if (targetFront == _usingFrontCamera) return;
 
     if (kIsWeb) {
       final cameras = await Helper.cameras;
@@ -380,7 +405,6 @@ class WebRTCService {
         throw StateError('Front and back cameras are not both available.');
       }
       final currentDeviceId = videoTrack.getSettings()['deviceId'];
-      final targetFront = !_usingFrontCamera;
       final targetByFacing = cameras.where((camera) {
         if (camera.deviceId == currentDeviceId) return false;
         final label = camera.label.toLowerCase();
@@ -418,7 +442,7 @@ class WebRTCService {
     }
 
     await Helper.switchCamera(videoTrack);
-    _usingFrontCamera = !_usingFrontCamera;
+    _usingFrontCamera = targetFront;
   }
 
   int _cameraSensorPriority(String label) {
@@ -463,6 +487,16 @@ class WebRTCService {
     await peerConnection?.close();
     await localStream?.dispose();
     await localRenderer?.dispose();
+    if (_screenCaptureForegroundStarted) {
+      _screenCaptureForegroundStarted = false;
+      try {
+        await _screenProjectionChannel.invokeMethod<void>(
+          'stopScreenProjectionService',
+        );
+      } catch (error) {
+        _reportError(error);
+      }
+    }
     peerConnection = null;
     _videoSender = null;
     localStream = null;
