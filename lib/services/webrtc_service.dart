@@ -9,6 +9,9 @@ import 'package:permission_handler/permission_handler.dart';
 class WebRTCService {
   WebRTCService({this.onError, this.onConnectionState});
 
+  static const _maxPublishingAttempts = 3;
+  static const _publishingRetryDelay = Duration(seconds: 2);
+
   static const _screenProjectionChannel =
       MethodChannel('com.kidguard/monitoring');
 
@@ -61,6 +64,47 @@ class WebRTCService {
     required String childId,
     bool permissionsAlreadyGranted = false,
     bool screenCapture = false,
+  }) async {
+    for (var attempt = 1; attempt <= _maxPublishingAttempts; attempt++) {
+      try {
+        await _startPublishingOnce(
+          database: database,
+          deviceId: deviceId,
+          parentUid: parentUid,
+          childId: childId,
+          permissionsAlreadyGranted: permissionsAlreadyGranted,
+          screenCapture: screenCapture,
+        );
+        return;
+      } on TimeoutException catch (error, stackTrace) {
+        debugPrint(
+          'WebRTC publishing timed out '
+          '(attempt $attempt/$_maxPublishingAttempts): $error',
+        );
+        if (attempt == _maxPublishingAttempts) {
+          Error.throwWithStackTrace(error, stackTrace);
+        }
+        try {
+          await dispose();
+        } catch (cleanupError, cleanupStackTrace) {
+          debugPrint(
+            'Could not clean up timed-out WebRTC publishing attempt: '
+            '$cleanupError',
+          );
+          Error.throwWithStackTrace(cleanupError, cleanupStackTrace);
+        }
+        await Future<void>.delayed(_publishingRetryDelay);
+      }
+    }
+  }
+
+  Future<void> _startPublishingOnce({
+    required FirebaseDatabase database,
+    required String deviceId,
+    required String parentUid,
+    required String childId,
+    required bool permissionsAlreadyGranted,
+    required bool screenCapture,
   }) async {
     if (!_isValidDatabaseKey(deviceId) || !_isValidDatabaseKey(childId)) {
       throw ArgumentError.value(deviceId, 'deviceId', 'Invalid RTDB key.');

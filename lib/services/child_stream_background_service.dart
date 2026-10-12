@@ -16,6 +16,9 @@ import 'firebase_config.dart';
 import 'webrtc_service.dart';
 
 class ChildStreamBackgroundService {
+  static const _configuredResponseTimeout = Duration(seconds: 45);
+  static const _maxConfigurationAttempts = 3;
+  static const _configurationRetryDelay = Duration(seconds: 2);
   static const _deviceIdKey = 'kidguard_stream_device_id';
   static const _parentUidKey = 'kidguard_stream_parent_uid';
   static const _childIdKey = 'kidguard_stream_child_id';
@@ -47,12 +50,11 @@ class ChildStreamBackgroundService {
 
     final service = FlutterBackgroundService();
     if (await service.isRunning()) {
-      final configured = service
-          .on('configured')
-          .firstWhere((event) => event?['deviceId'] == deviceId)
-          .timeout(const Duration(seconds: 15));
-      service.invoke('configure', configuration);
-      final result = await configured;
+      final result = await _configureRunningService(
+        service: service,
+        deviceId: deviceId,
+        configuration: configuration,
+      );
       if (result?['success'] != true) {
         throw StateError(
           result?['error'] as String? ??
@@ -94,6 +96,39 @@ class ChildStreamBackgroundService {
     }
   }
 
+  static Future<Map<String, dynamic>?> _configureRunningService({
+    required FlutterBackgroundService service,
+    required String deviceId,
+    required Map<String, dynamic> configuration,
+  }) async {
+    for (var attempt = 1; attempt <= _maxConfigurationAttempts; attempt++) {
+      final configured = service
+          .on('configured')
+          .firstWhere((event) => event?['deviceId'] == deviceId)
+          .timeout(_configuredResponseTimeout);
+      service.invoke('configure', configuration);
+      try {
+        return await configured;
+      } on TimeoutException catch (error, stackTrace) {
+        debugPrint(
+          'Timed out waiting for child stream service configuration '
+          '(attempt $attempt/$_maxConfigurationAttempts): $error',
+        );
+        if (attempt == _maxConfigurationAttempts) {
+          Error.throwWithStackTrace(
+            StateError(
+              'The child stream service did not respond after '
+              '$_maxConfigurationAttempts configuration attempts.',
+            ),
+            stackTrace,
+          );
+        }
+        await Future<void>.delayed(_configurationRetryDelay);
+      }
+    }
+    throw StateError('Child stream service configuration retry failed.');
+  }
+
   static Future<void> setScreenCaptureActive(bool active) async {
     final preferences = await SharedPreferences.getInstance();
     await preferences.setBool(_screenCaptureActiveKey, active);
@@ -128,18 +163,17 @@ class ChildStreamBackgroundService {
         if (deviceId == null || parentUid == null || childId == null) {
           throw StateError('Paired child-device details are not available.');
         }
-        final configured = service
-            .on('configured')
-            .firstWhere((event) => event?['deviceId'] == deviceId)
-            .timeout(const Duration(seconds: 15));
-        service.invoke('configure', {
-          'deviceId': deviceId,
-          'parentUid': parentUid,
-          'childId': childId,
-          'locationEnabled': locationEnabled,
-          'appUsageEnabled': appUsageEnabled,
-        });
-        final result = await configured;
+        final result = await _configureRunningService(
+          service: service,
+          deviceId: deviceId,
+          configuration: {
+            'deviceId': deviceId,
+            'parentUid': parentUid,
+            'childId': childId,
+            'locationEnabled': locationEnabled,
+            'appUsageEnabled': appUsageEnabled,
+          },
+        );
         if (result?['success'] != true) {
           throw StateError(
             result?['error'] as String? ??
@@ -192,8 +226,21 @@ Future<void> childStreamServiceEntrypoint(ServiceInstance service) async {
       databaseURL: FirebaseConfig.childAndroid.databaseURL,
     );
     final runner = _ChildStreamCommandRunner(service, database);
+    var configurationQueue = Future<void>.value();
     service.on('configure').listen((configuration) {
-      unawaited(runner.configure(configuration));
+      configurationQueue = configurationQueue.then((_) async {
+        try {
+          await runner.configure(configuration);
+        } catch (error, stackTrace) {
+          debugPrint('Could not configure child stream service: $error');
+          debugPrintStack(stackTrace: stackTrace);
+          service.invoke('configured', {
+            'deviceId': configuration?['deviceId'],
+            'success': false,
+            'error': error.toString(),
+          });
+        }
+      });
     });
     service.on('stopService').listen((_) {
       unawaited(runner.dispose());
