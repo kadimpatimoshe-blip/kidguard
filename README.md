@@ -47,6 +47,15 @@ firewalls, configure an authorized TURN service alongside the default STUN
 server in `lib/services/webrtc_service.dart`. Streaming stops when the child
 app leaves the foreground.
 
+The child publisher starts at up to 720p/30 fps and samples WebRTC outbound
+bandwidth and video packet loss every four seconds. During congestion it lowers
+the sender bitrate, frame rate, and encoded resolution; it restores quality
+gradually after network conditions improve. Camera exposure and white balance
+remain on the camera's automatic settings for supported devices. When a browser
+offers multiple labelled cameras on a facing direction, switching prefers a
+main or wide sensor over ultra-wide, telephoto, or macro alternatives; Android
+uses the platform WebRTC camera selection.
+
 Realtime Database rules must require authenticated access to pairing codes,
 allow parents to read and manage only their own child records, and allow a
 child account to write only `presence` and `telemetry` for records whose

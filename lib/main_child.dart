@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 
+import 'services/firebase_config.dart';
 import 'views/auth_screen.dart';
 import 'views/child_pairing_view.dart';
 
@@ -12,15 +13,7 @@ Future<void> main() async {
   late final FirebaseApp app;
   try {
     app = await Firebase.initializeApp(
-      options: const FirebaseOptions(
-        apiKey: 'AIzaSyCn_0mbkQNSlOIvUA3Tv9QKFn8skyZL0vg',
-        appId: '1:897177192961:android:205829551a9fac30938e00',
-        messagingSenderId: '897177192961',
-        projectId: 'kidguard-3b499',
-        databaseURL:
-            'https://kidguard-3b499-default-rtdb.asia-southeast1.firebasedatabase.app',
-        storageBucket: 'kidguard-3b499.firebasestorage.app',
-      ),
+      options: FirebaseConfig.childAndroid,
     );
   } catch (error) {
     runApp(

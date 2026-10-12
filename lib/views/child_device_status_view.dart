@@ -3,8 +3,11 @@ import 'dart:async';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
 
+import '../services/child_stream_background_service.dart';
 import '../services/webrtc_service.dart';
 
 class ChildDeviceStatusView extends StatefulWidget {
@@ -38,6 +41,8 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
   StreamSubscription<DatabaseEvent>? _connectionSubscription;
   StreamSubscription<DatabaseEvent>? _deviceSubscription;
   StreamSubscription<DatabaseEvent>? _controlSubscription;
+  StreamSubscription<Map<String, dynamic>?>? _streamStateSubscription;
+  StreamSubscription<Map<String, dynamic>?>? _streamErrorSubscription;
   Future<void> _remoteCommandQueue = Future<void>.value();
   Timer? _heartbeatTimer;
   bool _connected = false;
@@ -47,6 +52,9 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
   late final WebRTCService _webRTCService;
   bool _startingStream = false;
   bool _streamActive = false;
+  bool _cameraPermissionsGranted = false;
+  bool _backgroundServiceReady = false;
+  bool _permissionFlowInProgress = false;
   bool _streamAudioMuted = false;
   String? _streamError;
   String? _syncError;
@@ -62,7 +70,8 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
         if (!mounted) return;
         setState(() {
           _streamActive =
-              state != RTCPeerConnectionState.RTCPeerConnectionStateClosed;
+              state != RTCPeerConnectionState.RTCPeerConnectionStateClosed &&
+                  state != RTCPeerConnectionState.RTCPeerConnectionStateFailed;
         });
       },
     );
@@ -79,6 +88,24 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
     _telemetryReference = widget.database.ref('$devicePath/telemetry');
     _controlReference =
         widget.database.ref('/devices/${widget.deviceId}/control');
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      final service = FlutterBackgroundService();
+      _streamStateSubscription = service.on('streamState').listen((event) {
+        if (!mounted || event == null) return;
+        setState(() {
+          _streamActive = event['active'] == true;
+          if (event['audioMuted'] is bool) {
+            _streamAudioMuted = event['audioMuted'] as bool;
+          }
+          if (_streamActive) _streamError = null;
+        });
+      });
+      _streamErrorSubscription = service.on('serviceError').listen((event) {
+        if (!mounted || event?['error'] is! String) return;
+        setState(() => _streamError = event!['error'] as String);
+      });
+      unawaited(_requestPermissionsAndStartBackgroundService());
+    }
     _connectionSubscription =
         widget.database.ref('.info/connected').onValue.listen(
               _handleConnection,
@@ -117,12 +144,17 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appActive = state == AppLifecycleState.resumed;
-    if (!_appActive && _streamActive) {
-      unawaited(_stopLiveStream());
+    if (_appActive &&
+        !kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android &&
+        !_backgroundServiceReady) {
+      unawaited(
+        _requestPermissionsAndStartBackgroundService(requestIfNeeded: false),
+      );
     }
     if (!_canSyncDevice) return;
     _syncTelemetry(state);
-    if (_appActive) {
+    if (_appActive || _streamActive) {
       unawaited(_sendHeartbeat());
     } else {
       unawaited(_markOffline());
@@ -149,7 +181,7 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
           return;
         }
 
-        await _listenForRemoteControls();
+        if (kIsWeb) await _listenForRemoteControls();
         await _presenceReference.onDisconnect().update({
           'online': false,
           'lastSeen': ServerValue.timestamp,
@@ -229,9 +261,9 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
   Future<void> _executeRemoteCommand(String command) async {
     switch (command) {
       case 'startStream':
-        if (!_appActive) {
+        if (kIsWeb && !_appActive) {
           throw StateError(
-              'The child app must be open to start a live stream.');
+              'The child browser must be active to start a live stream.');
         }
         await _startLiveStream(rethrowOnError: true);
       case 'stopStream':
@@ -247,7 +279,7 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
   }
 
   Future<void> _sendHeartbeat() async {
-    if (!_canSyncDevice || !_appActive) return;
+    if (!_canSyncDevice || (!_appActive && !_streamActive)) return;
     try {
       await _writePresence();
       if (mounted) setState(() => _syncError = null);
@@ -298,32 +330,45 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
     }
   }
 
-  Future<void> _confirmAndStartStream() async {
-    final consent = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Allow live camera and microphone?'),
-        content: const Text(
-          'Starting a live stream shares this device’s camera and microphone '
-          'with the parent account paired to this device. Your browser or '
-          'Android device will ask for camera and microphone permission. '
-          'You can stop sharing at any time.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    );
-    if (consent != true || !mounted) return;
-
-    await _startLiveStream();
+  Future<void> _requestPermissionsAndStartBackgroundService({
+    bool requestIfNeeded = true,
+  }) async {
+    if (_permissionFlowInProgress) return;
+    _permissionFlowInProgress = true;
+    try {
+      final permissions = [Permission.camera, Permission.microphone];
+      final statuses = requestIfNeeded
+          ? await permissions.request()
+          : {
+              for (final permission in permissions)
+                permission: await permission.status,
+            };
+      if (statuses[Permission.camera]?.isGranted != true ||
+          statuses[Permission.microphone]?.isGranted != true) {
+        throw StateError(
+          'Camera and microphone permissions are required for parent-'
+          'controlled live streaming.',
+        );
+      }
+      if (mounted) {
+        setState(() {
+          _cameraPermissionsGranted = true;
+          _streamError = null;
+        });
+      }
+      await ChildStreamBackgroundService.start(
+        deviceId: widget.deviceId,
+        parentUid: widget.parentUid,
+        childId: widget.childId,
+      );
+      _backgroundServiceReady = true;
+    } catch (error, stackTrace) {
+      debugPrint('Could not enable parent-controlled live streaming: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (mounted) setState(() => _streamError = error.toString());
+    } finally {
+      _permissionFlowInProgress = false;
+    }
   }
 
   Future<void> _startLiveStream({bool rethrowOnError = false}) async {
@@ -400,6 +445,8 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
     _connectionSubscription?.cancel();
     _deviceSubscription?.cancel();
     _controlSubscription?.cancel();
+    _streamStateSubscription?.cancel();
+    _streamErrorSubscription?.cancel();
     if (_connected && !_parentUnlinked) {
       unawaited(_markOffline());
     }
@@ -437,7 +484,8 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
-                  if (_streamActive &&
+                  if (kIsWeb &&
+                      _streamActive &&
                       _webRTCService.localRenderer != null) ...[
                     ClipRRect(
                       borderRadius: BorderRadius.circular(12),
@@ -457,33 +505,24 @@ class _ChildDeviceStatusViewState extends State<ChildDeviceStatusView>
                     ),
                   ],
                   const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: _startingStream
-                        ? null
-                        : _streamActive
-                            ? _stopLiveStream
-                            : _confirmAndStartStream,
-                    icon: Icon(
-                      _streamActive
-                          ? Icons.stop_circle_outlined
-                          : Icons.videocam,
-                    ),
-                    label: Text(
-                      _startingStream
-                          ? 'Starting live stream…'
-                          : _streamActive
-                              ? 'Stop live stream'
-                              : 'Start live stream',
-                    ),
+                  Text(
+                    kIsWeb
+                        ? 'The paired parent controls when a live stream starts '
+                            'and stops. Your browser may request camera and '
+                            'microphone access when the parent starts one.'
+                        : _cameraPermissionsGranted
+                            ? _streamActive
+                                ? _streamAudioMuted
+                                    ? 'A parent-authorized live stream is active. '
+                                        'The microphone is muted.'
+                                    : 'A parent-authorized live stream is active.'
+                                : 'Camera and microphone permissions are ready. '
+                                    'The paired parent controls when streaming starts and stops.'
+                            : 'Allow camera and microphone access once to enable '
+                                'live streams controlled by the paired parent.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium,
                   ),
-                  if (!_streamActive) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Camera and microphone stay off until you choose to start.',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
                   if (_streamError != null) ...[
                     const SizedBox(height: 12),
                     SelectableText(

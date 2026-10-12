@@ -142,7 +142,7 @@ class _ParentLiveStreamViewState extends State<ParentLiveStreamView> {
     }
     if (_offerReceived) return 'Connecting to child device…';
     if (_streamRequested) return 'Start request sent; waiting for the child…';
-    return 'Start a live stream on the child device.';
+    return 'Send a start request to begin a live stream.';
   }
 
   @override
@@ -267,8 +267,9 @@ class _ParentLiveStreamViewState extends State<ParentLiveStreamView> {
                   ],
                   const SizedBox(height: 12),
                   Text(
-                    'The child app must be open and have camera and microphone '
-                    'permissions before media can be sent.',
+                    'The child device needs camera and microphone permissions '
+                    'and its background streaming service initialized. If '
+                    'Android force-stops the app, reopen it to reconnect.',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),

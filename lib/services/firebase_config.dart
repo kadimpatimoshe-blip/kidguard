@@ -2,6 +2,16 @@ import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 class FirebaseConfig {
+  static const FirebaseOptions childAndroid = FirebaseOptions(
+    apiKey: 'AIzaSyCn_0mbkQNSlOIvUA3Tv9QKFn8skyZL0vg',
+    appId: '1:897177192961:android:205829551a9fac30938e00',
+    messagingSenderId: '897177192961',
+    projectId: 'kidguard-3b499',
+    databaseURL:
+        'https://kidguard-3b499-default-rtdb.asia-southeast1.firebasedatabase.app',
+    storageBucket: 'kidguard-3b499.firebasestorage.app',
+  );
+
   static const FirebaseOptions web = FirebaseOptions(
     apiKey: 'AIzaSyCn_0mbkQNSlOIvUA3Tv9QKFn8skyZL0vg',
     appId: '1:897177192961:web:286e429b79dabe05938e00',

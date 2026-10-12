@@ -12,12 +12,23 @@ class WebRTCService {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
     ],
+    'bundlePolicy': 'max-bundle',
+    'rtcpMuxPolicy': 'require',
+    'iceCandidatePoolSize': 2,
   };
+
+  static const _videoProfiles = [
+    _VideoProfile(maxBitrate: 1400000, maxFramerate: 30, scaleDownBy: 1),
+    _VideoProfile(maxBitrate: 850000, maxFramerate: 24, scaleDownBy: 1.25),
+    _VideoProfile(maxBitrate: 450000, maxFramerate: 18, scaleDownBy: 1.75),
+    _VideoProfile(maxBitrate: 220000, maxFramerate: 12, scaleDownBy: 2.5),
+  ];
 
   final void Function(Object error)? onError;
   final void Function(RTCPeerConnectionState state)? onConnectionState;
   RTCVideoRenderer? localRenderer;
   RTCPeerConnection? peerConnection;
+  RTCRtpSender? _videoSender;
   MediaStream? localStream;
   DatabaseReference? _signalReference;
   String? _sessionId;
@@ -29,6 +40,12 @@ class WebRTCService {
   bool _disposed = false;
   bool _audioMuted = false;
   bool _usingFrontCamera = true;
+  Timer? _adaptationTimer;
+  int _currentVideoProfile = 0;
+  int _betterNetworkSamples = 0;
+  int? _lastPacketsLost;
+  int? _lastPacketsReceived;
+  bool _samplingNetwork = false;
 
   bool get audioMuted => _audioMuted;
 
@@ -37,6 +54,7 @@ class WebRTCService {
     required String deviceId,
     required String parentUid,
     required String childId,
+    bool permissionsAlreadyGranted = false,
   }) async {
     if (!_isValidDatabaseKey(deviceId) || !_isValidDatabaseKey(childId)) {
       throw ArgumentError.value(deviceId, 'deviceId', 'Invalid RTDB key.');
@@ -45,7 +63,7 @@ class WebRTCService {
     _disposed = false;
     _remoteDescriptionSet = false;
     _pendingRemoteCandidates.clear();
-    if (!kIsWeb) await _requestPermissions();
+    if (!kIsWeb && !permissionsAlreadyGranted) await _requestPermissions();
     localStream = await navigator.mediaDevices.getUserMedia({
       'audio': {
         'echoCancellation': true,
@@ -57,6 +75,8 @@ class WebRTCService {
         'width': {'ideal': 1280},
         'height': {'ideal': 720},
         'frameRate': {'ideal': 30},
+        'exposureMode': {'ideal': 'continuous'},
+        'whiteBalanceMode': {'ideal': 'continuous'},
       },
     });
     if (kIsWeb && localStream!.getVideoTracks().isNotEmpty) {
@@ -76,7 +96,15 @@ class WebRTCService {
       unawaited(_writeCandidate('childCandidates', candidate));
     };
     for (final track in localStream!.getTracks()) {
-      await peerConnection!.addTrack(track, localStream!);
+      final sender = await peerConnection!.addTrack(track, localStream!);
+      if (track.kind == 'video') _videoSender = sender;
+    }
+    if (_videoSender != null) {
+      await _applyVideoProfile(0);
+      _adaptationTimer = Timer.periodic(
+        const Duration(seconds: 4),
+        (_) => unawaited(_sampleNetworkAndAdapt()),
+      );
     }
 
     _sessionId = '${deviceId}_${DateTime.now().microsecondsSinceEpoch}';
@@ -188,6 +216,118 @@ class WebRTCService {
     }
   }
 
+  Future<void> _sampleNetworkAndAdapt() async {
+    final connection = peerConnection;
+    if (_samplingNetwork || _disposed || connection == null) return;
+    _samplingNetwork = true;
+    try {
+      final reports = await connection.getStats();
+      double? availableBitrate;
+      int? packetsLost;
+      int? packetsReceived;
+      for (final report in reports) {
+        final values = report.values;
+        if (report.type == 'candidate-pair') {
+          final isUsablePair =
+              values['selected'] == true || values['state'] == 'succeeded';
+          final bitrate = isUsablePair
+              ? _numberValue(values['availableOutgoingBitrate'])
+              : null;
+          if (bitrate != null &&
+              (availableBitrate == null || bitrate > availableBitrate)) {
+            availableBitrate = bitrate;
+          }
+        } else if (report.type == 'remote-inbound-rtp' &&
+            (values['kind'] == 'video' || values['mediaType'] == 'video')) {
+          packetsLost = _intValue(values['packetsLost']);
+          packetsReceived = _intValue(values['packetsReceived']);
+        }
+      }
+
+      double? lossRatio;
+      if (packetsLost != null && packetsReceived != null) {
+        final previousLost = _lastPacketsLost;
+        final previousReceived = _lastPacketsReceived;
+        if (previousLost != null && previousReceived != null) {
+          final lostDelta = packetsLost - previousLost;
+          final receivedDelta = packetsReceived - previousReceived;
+          final totalDelta = lostDelta + receivedDelta;
+          if (lostDelta >= 0 && receivedDelta >= 0 && totalDelta > 0) {
+            lossRatio = lostDelta / totalDelta;
+          }
+        }
+        _lastPacketsLost = packetsLost;
+        _lastPacketsReceived = packetsReceived;
+      }
+
+      final targetProfile = _profileForNetwork(availableBitrate, lossRatio);
+      if (targetProfile == null) return;
+      if (targetProfile > _currentVideoProfile) {
+        _betterNetworkSamples = 0;
+        await _applyVideoProfile(targetProfile);
+      } else if (targetProfile < _currentVideoProfile) {
+        _betterNetworkSamples++;
+        if (_betterNetworkSamples >= 3) {
+          _betterNetworkSamples = 0;
+          await _applyVideoProfile(_currentVideoProfile - 1);
+        }
+      } else {
+        _betterNetworkSamples = 0;
+      }
+    } catch (error, stackTrace) {
+      _reportError(error, stackTrace);
+    } finally {
+      _samplingNetwork = false;
+    }
+  }
+
+  int? _profileForNetwork(double? availableBitrate, double? lossRatio) {
+    if (availableBitrate == null && lossRatio == null) return null;
+    if ((availableBitrate != null && availableBitrate < 250000) ||
+        (lossRatio != null && lossRatio >= 0.12)) {
+      return 3;
+    }
+    if ((availableBitrate != null && availableBitrate < 550000) ||
+        (lossRatio != null && lossRatio >= 0.08)) {
+      return 2;
+    }
+    if ((availableBitrate != null && availableBitrate < 1100000) ||
+        (lossRatio != null && lossRatio >= 0.04)) {
+      return 1;
+    }
+    return 0;
+  }
+
+  Future<void> _applyVideoProfile(int profileIndex) async {
+    final sender = _videoSender;
+    if (sender == null) return;
+    final parameters = sender.parameters;
+    final encodings = parameters.encodings;
+    if (encodings == null || encodings.isEmpty) {
+      throw StateError('The WebRTC video sender has no encoding parameters.');
+    }
+
+    final profile = _videoProfiles[profileIndex];
+    parameters.degradationPreference = RTCDegradationPreference.BALANCED;
+    for (final encoding in encodings) {
+      encoding.maxBitrate = profile.maxBitrate;
+      encoding.maxFramerate = profile.maxFramerate;
+      encoding.scaleResolutionDownBy = profile.scaleDownBy;
+    }
+    if (!await sender.setParameters(parameters)) {
+      throw StateError('Could not apply the adaptive video profile.');
+    }
+    _currentVideoProfile = profileIndex;
+  }
+
+  double? _numberValue(Object? value) {
+    return value is num ? value.toDouble() : null;
+  }
+
+  int? _intValue(Object? value) {
+    return value is num ? value.toInt() : null;
+  }
+
   Future<void> _writeCandidate(
     String collection,
     RTCIceCandidate candidate,
@@ -254,6 +394,14 @@ class WebRTCService {
       if (alternatives.isEmpty) {
         throw StateError('No alternate camera is available.');
       }
+      alternatives.sort((first, second) {
+        return _cameraSensorPriority(first.label)
+            .compareTo(_cameraSensorPriority(second.label));
+      });
+      targetByFacing.sort(
+        (first, second) => _cameraSensorPriority(first.label)
+            .compareTo(_cameraSensorPriority(second.label)),
+      );
       final target =
           targetByFacing.isNotEmpty ? targetByFacing.first : alternatives.first;
       await Helper.switchCamera(videoTrack, target.deviceId, stream);
@@ -273,6 +421,18 @@ class WebRTCService {
     _usingFrontCamera = !_usingFrontCamera;
   }
 
+  int _cameraSensorPriority(String label) {
+    final normalized = label.toLowerCase();
+    if (normalized.contains('ultra-wide') ||
+        normalized.contains('ultrawide') ||
+        normalized.contains('telephoto') ||
+        normalized.contains('macro')) {
+      return 2;
+    }
+    if (normalized.contains('main') || normalized.contains('wide')) return 0;
+    return 1;
+  }
+
   Future<bool> toggleAudioMute() async {
     final audioTracks = localStream?.getAudioTracks() ?? <MediaStreamTrack>[];
     if (audioTracks.isEmpty) {
@@ -288,6 +448,8 @@ class WebRTCService {
 
   Future<void> dispose() async {
     _disposed = true;
+    _adaptationTimer?.cancel();
+    _adaptationTimer = null;
     await _answerSubscription?.cancel();
     await _candidateSubscription?.cancel();
     await _viewerStatusSubscription?.cancel();
@@ -302,11 +464,29 @@ class WebRTCService {
     await localStream?.dispose();
     await localRenderer?.dispose();
     peerConnection = null;
+    _videoSender = null;
     localStream = null;
     localRenderer = null;
     _audioMuted = false;
     _usingFrontCamera = true;
+    _currentVideoProfile = 0;
+    _betterNetworkSamples = 0;
+    _lastPacketsLost = null;
+    _lastPacketsReceived = null;
+    _samplingNetwork = false;
   }
+}
+
+class _VideoProfile {
+  const _VideoProfile({
+    required this.maxBitrate,
+    required this.maxFramerate,
+    required this.scaleDownBy,
+  });
+
+  final int maxBitrate;
+  final int maxFramerate;
+  final double scaleDownBy;
 }
 
 class WebRTCViewerService {
@@ -324,6 +504,9 @@ class WebRTCViewerService {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
     ],
+    'bundlePolicy': 'max-bundle',
+    'rtcpMuxPolicy': 'require',
+    'iceCandidatePoolSize': 2,
   };
 
   final FirebaseDatabase database;
