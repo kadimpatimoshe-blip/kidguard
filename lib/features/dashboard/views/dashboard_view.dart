@@ -5,7 +5,8 @@ import 'package:flutter/material.dart';
 import '../models/parent_child_device.dart';
 import '../services/parent_device_service.dart';
 import 'add_child_view.dart';
-import 'parent_live_stream_view.dart';
+import 'parent_live_stream_view.dart'
+    if (dart.library.js_interop) 'parent_live_stream_view_web.dart';
 
 class DashboardView extends StatelessWidget {
   const DashboardView({

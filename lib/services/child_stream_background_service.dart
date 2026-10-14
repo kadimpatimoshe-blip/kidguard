@@ -4,6 +4,7 @@ import 'dart:ui';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
@@ -33,6 +34,12 @@ class ChildStreamBackgroundService {
     required String parentUid,
     required String childId,
   }) async {
+    if (kIsWeb) {
+      throw UnsupportedError(
+        'The child background stream service is not available on web.',
+      );
+    }
+
     final configuration = <String, dynamic>{
       'deviceId': deviceId,
       'parentUid': parentUid,
@@ -139,6 +146,12 @@ class ChildStreamBackgroundService {
     required bool callLogsEnabled,
     required bool appUsageEnabled,
   }) async {
+    if (kIsWeb) {
+      throw UnsupportedError(
+        'Child background monitoring is not available on web.',
+      );
+    }
+
     final preferences = await SharedPreferences.getInstance();
     final previousLocationEnabled =
         preferences.getBool(_locationEnabledKey) ?? false;
