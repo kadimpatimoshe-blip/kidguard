@@ -3,57 +3,39 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 
-import 'services/firebase_config.dart';
-import 'views/auth_screen.dart';
-import 'views/child_pairing_view.dart';
+import '../services/firebase_config.dart';
+import '../features/dashboard/views/parent_home_view.dart';
+import '../views/auth_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  late final FirebaseApp app;
-  try {
-    app = await Firebase.initializeApp(
-      options: FirebaseConfig.childAndroid,
-    );
-  } catch (error) {
-    runApp(
-      MaterialApp(
-        home: FirebaseStartupError(error: error.toString()),
-      ),
-    );
-    return;
-  }
-
-  runApp(KidGuardChildApp(firebaseApp: app));
+  runApp(const KidGuardParentApp());
 }
 
-class KidGuardChildApp extends StatefulWidget {
-  const KidGuardChildApp({required this.firebaseApp, super.key});
-
-  final FirebaseApp firebaseApp;
+class KidGuardParentApp extends StatefulWidget {
+  const KidGuardParentApp({super.key});
 
   @override
-  State<KidGuardChildApp> createState() => _KidGuardChildAppState();
+  State<KidGuardParentApp> createState() => _KidGuardParentAppState();
 }
 
-class _KidGuardChildAppState extends State<KidGuardChildApp> {
+class _KidGuardParentAppState extends State<KidGuardParentApp> {
   late final Future<_FirebaseServices> _firebaseServicesFuture;
 
   @override
   void initState() {
     super.initState();
-    _firebaseServicesFuture = _initializeFirebase(widget.firebaseApp);
+    _firebaseServicesFuture = _initializeFirebase();
   }
 
-  Future<_FirebaseServices> _initializeFirebase(FirebaseApp app) async {
-    final auth = FirebaseAuth.instanceFor(app: app);
-    await auth.signOut();
-
+  Future<_FirebaseServices> _initializeFirebase() async {
+    final options = FirebaseConfig.fromEnvironment();
+    final app = await Firebase.initializeApp(options: options);
     return _FirebaseServices(
-      auth: auth,
+      auth: FirebaseAuth.instanceFor(app: app),
       database: FirebaseDatabase.instanceFor(
         app: app,
-        databaseURL: app.options.databaseURL,
+        databaseURL: options.databaseURL,
       ),
     );
   }
@@ -61,7 +43,7 @@ class _KidGuardChildAppState extends State<KidGuardChildApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'KidGuard Child',
+      title: 'KidGuard Parent',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -81,38 +63,43 @@ class _KidGuardChildAppState extends State<KidGuardChildApp> {
               body: Center(child: CircularProgressIndicator()),
             );
           }
-          final services = snapshot.data!;
-          return StreamBuilder<User?>(
-            stream: services.auth.authStateChanges(),
-            builder: (context, authSnapshot) {
-              if (authSnapshot.hasError) {
-                return FirebaseStartupError(
-                  error:
-                      'Could not check Firebase authentication: ${authSnapshot.error}',
-                );
-              }
-              if (authSnapshot.connectionState == ConnectionState.waiting) {
-                return const Scaffold(
-                  body: Center(child: CircularProgressIndicator()),
-                );
-              }
-
-              final user = authSnapshot.data;
-              if (user == null || user.isAnonymous) {
-                return AuthScreen(
-                  auth: services.auth,
-                  showChildModeAction: false,
-                );
-              }
-
-              return ChildPairingView(
-                auth: services.auth,
-                database: services.database,
-              );
-            },
-          );
+          return _buildAuthenticatedRoute(snapshot.data!);
         },
       ),
+    );
+  }
+
+  Widget _buildAuthenticatedRoute(_FirebaseServices services) {
+    return StreamBuilder<User?>(
+      stream: services.auth.authStateChanges(),
+      builder: (context, authSnapshot) {
+        if (authSnapshot.hasError) {
+          return FirebaseStartupError(
+            error:
+                'Could not check Firebase authentication: ${authSnapshot.error}',
+          );
+        }
+        if (authSnapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final user = authSnapshot.data;
+        if (user == null) {
+          return AuthScreen(
+            auth: services.auth,
+            showChildModeAction: false,
+          );
+        }
+
+        return ParentHomeView(
+          key: ValueKey(user.uid),
+          auth: services.auth,
+          database: services.database,
+          parentUid: user.uid,
+        );
+      },
     );
   }
 }
