@@ -271,7 +271,7 @@ export const subscribeToChildDevices = (
             return;
           }
 
-          const online = item.presence?.online === true || item.status === 'paired' || item.status === 'bound' || isDeviceRecentlyOnline(item);
+          const online = item.presence?.online === true || isDeviceRecentlyOnline(item);
           const rawLoc = item.location;
           let parsedLocation: LocationData | undefined = undefined;
           if (rawLoc && typeof rawLoc === 'object') {
@@ -1363,6 +1363,27 @@ export const claimPairingCode = async (
     const childId = bindData.childId;
     const nowIso = new Date().toISOString();
 
+    // 1.5 Strictly enforce 1 device limit: Remove all existing children for this parent first
+    try {
+      const childrenRef = ref(database, `parents/${parentUid}/children`);
+      const childrenSnap = await get(childrenRef);
+      if (childrenSnap.exists()) {
+        const children = childrenSnap.val();
+        const cleanupUpdates: Record<string, any> = {};
+        for (const cid of Object.keys(children)) {
+          cleanupUpdates[`parents/${parentUid}/children/${cid}`] = null;
+          // Also try to clear the device's own record if we have its code
+          const oldCode = children[cid].pairingCode;
+          if (oldCode) {
+            cleanupUpdates[`devices/${oldCode}`] = null;
+          }
+        }
+        await update(ref(database), cleanupUpdates);
+      }
+    } catch (e) {
+      console.warn('Cleanup of existing devices failed (non-fatal):', e);
+    }
+
     const connectedDevice: ParentChildDevice = {
       childId,
       deviceId,
@@ -1396,7 +1417,8 @@ export const claimPairingCode = async (
 
     const updates: Record<string, any> = {};
     updates[`parents/${parentUid}/children/${childId}`] = sanitizeForRTDB(connectedDevice);
-    updates[`devices/${cleanCode}`] = { ...connectedDevice, parentUid }; 
+    updates[`devices/${cleanCode}`] = { ...connectedDevice, parentUid, status: 'synced' }; 
+    updates[`pairings/${cleanCode}`] = { ...connectedDevice, parentUid, status: 'synced' };
     
     await update(ref(database), updates);
     await remove(bindRef);
@@ -1580,27 +1602,134 @@ export const claimPairingCode = async (
   }
 
   // Update local parent console state cache
-  const current = loadLocalDevices(parentUid);
-  if (current.length >= 5) {
-    throw new Error('Maximum device limit reached (up to 5 devices). Unlink an existing device first.');
-  }
-
-  const updatedList = [connectedDevice, ...current.filter(d => d.childId !== childId)];
+  // Strictly enforce 1-device limit: replace all existing with the new one
+  const updatedList = [connectedDevice];
   saveLocalDevices(parentUid, updatedList);
 
   return connectedDevice;
 };
 
-export const pairChildDevice = claimPairingCode;
+// Simplified and robust pairing logic for the "FlashGet Kids" style
+export const pairChildDevice = async (
+  parentUid: string, 
+  code: string, 
+  customModelName?: string
+): Promise<ParentChildDevice> => {
+  if (!database) throw new Error('Database not initialized');
+  const cleanCode = (code || '').trim().toUpperCase();
 
-// Unlink child device
-export const unlinkChildDevice = async (parentUid: string, childId: string): Promise<void> => {
-  if (database) {
-    try {
-      await remove(ref(database, `parents/${parentUid}/children/${childId}`));
-    } catch (e) {
-      console.warn('Firebase unlink error, updating local:', e);
+  // 1. Fetch the pending bind or device record
+  const bindRef = ref(database, `pending_binds/${cleanCode}`);
+  const deviceRef = ref(database, `devices/${cleanCode}`);
+  
+  const [bindSnap, deviceSnap] = await Promise.all([
+    get(bindRef),
+    get(deviceRef)
+  ]);
+
+  const bindData = bindSnap.val();
+  const deviceData = deviceSnap.val();
+  
+  if (!bindData && !deviceData) {
+    throw new Error('Invalid or expired pairing code. Please regenerate on child device.');
+  }
+
+  const baseData = bindData || deviceData;
+  const childId = baseData.childId || `child_${cleanCode}`;
+  const deviceId = baseData.deviceId || `dev_${cleanCode}`;
+  const modelName = customModelName || baseData.deviceModelName || `Device ${cleanCode}`;
+
+  // 2. Prepare the paired device record
+  const nowIso = new Date().toISOString();
+  const connectedDevice: ParentChildDevice = {
+    childId,
+    deviceId,
+    childUid: baseData.childUid || '',
+    pairingCode: cleanCode,
+    status: 'paired',
+    timestamp: nowIso,
+    isOnline: true,
+    lastHeartbeat: nowIso,
+    lastSeen: nowIso,
+    deviceModelName: modelName,
+    deviceManufacturer: baseData.deviceManufacturer || 'Android',
+    platform: baseData.platform || 'android',
+    appState: 'resumed',
+    presence: { online: true, heartbeatAt: Date.now(), lastSeen: Date.now() },
+    telemetry: baseData.telemetry || {
+      deviceModelName: modelName,
+      platform: 'android',
+      appState: 'resumed',
+      batteryLevel: 100,
+      isCharging: false,
+      updatedAt: Date.now(),
+    },
+    monitoringSettings: {
+      locationEnabled: true,
+      callLogsEnabled: true,
+      appUsageEnabled: true,
+      notificationsEnabled: true,
     }
+  };
+
+  // 3. ENFORCE 1-DEVICE LIMIT: Delete any existing children for this parent
+  const parentChildrenRef = ref(database, `parents/${parentUid}/children`);
+  const existingChildrenSnap = await get(parentChildrenRef);
+  const existingChildren = existingChildrenSnap.val();
+  
+  const updates: Record<string, any> = {};
+  if (existingChildren) {
+    Object.keys(existingChildren).forEach(oldChildId => {
+      const oldChild = existingChildren[oldChildId];
+      updates[`parents/${parentUid}/children/${oldChildId}`] = null;
+      if (oldChild?.pairingCode) {
+        updates[`devices/${oldChild.pairingCode}`] = null;
+        updates[`pairings/${oldChild.pairingCode}`] = null;
+      }
+    });
+  }
+
+  // 4. Save the new link
+  updates[`parents/${parentUid}/children/${childId}`] = sanitizeForRTDB(connectedDevice);
+  updates[`devices/${cleanCode}`] = { ...connectedDevice, parentUid, status: 'synced' };
+  updates[`pairings/${cleanCode}`] = { ...connectedDevice, parentUid, status: 'synced' };
+  
+  // 5. Atomic Update and Cleanup
+  await update(ref(database), updates);
+  if (bindSnap.exists()) {
+    await remove(bindRef);
+  }
+
+  // Update local cache
+  saveLocalDevices(parentUid, [connectedDevice]);
+
+  return connectedDevice;
+};
+
+// Unlink child device (Fully remove from everywhere)
+export const unlinkChildDevice = async (parentUid: string, childId: string): Promise<void> => {
+  if (!database) return;
+  try {
+    const parentChildRef = ref(database, `parents/${parentUid}/children/${childId}`);
+    const snap = await get(parentChildRef);
+    const data = snap.val();
+
+    if (data && data.pairingCode) {
+      const pCode = data.pairingCode;
+      // Fully wipe the device traces in parallel
+      await Promise.all([
+        remove(ref(database, `devices/${pCode}`)),
+        remove(ref(database, `pairings/${pCode}`)),
+        remove(ref(database, `control/${pCode}`)),
+        remove(ref(database, `pending_binds/${pCode}`)),
+        remove(parentChildRef)
+      ]);
+    } else {
+      await remove(parentChildRef);
+    }
+  } catch (e) {
+    console.warn('Firebase unlink error:', e);
+    throw e; // Throw so UI can handle error
   }
 
   const current = loadLocalDevices(parentUid);
@@ -1642,53 +1771,79 @@ export const sendRemoteCommand = async (
   window.dispatchEvent(new CustomEvent('kidguard_remote_command', { detail: payload }));
 };
 
-// Child Mode Helper: Create pairing code in /devices/{code}, /pairings/{code}, and /pairing_codes/{deviceId}
+// Child Mode Helper: Get or Create pairing code tied to the user UID
+export const getOrCreateChildPairingCode = async (
+  uid: string,
+  deviceId: string,
+  modelName = 'Child Browser Companion'
+): Promise<string> => {
+  if (!database) return '';
+
+  try {
+    // 1. Check if this UID already has a code
+    const userRef = ref(database, `user_pairing_codes/${uid}`);
+    const snap = await get(userRef);
+    if (snap.exists()) {
+      return snap.val();
+    }
+
+    // 2. No code found, generate a new one
+    const chars = '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+    let randomPart = '';
+    for (let i = 0; i < 6; i++) {
+      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    const code = `FG-${randomPart}`;
+    const createdAt = new Date().toISOString();
+
+    const updates: Record<string, any> = {
+      [`user_pairing_codes/${uid}`]: code,
+      [`devices/${code}`]: {
+        deviceId,
+        childId: `child_${deviceId}`,
+        pairingCode: code,
+        status: 'pending',
+        createdAt,
+        lastSeen: createdAt,
+        deviceModelName: modelName,
+        online: true,
+      }
+    };
+
+    await update(ref(database), updates);
+    return code;
+  } catch (e) {
+    console.warn('Failed to get/create child pairing code:', e);
+    return '';
+  }
+};
+
 export const createChildPairingCodeRecord = async (
   deviceId: string,
   modelName = 'Child Browser Companion'
 ): Promise<string> => {
-  // Generate FlashGet Kids style alphanumeric code: FG-XXXXXX
-  const chars = '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // Excluding ambiguous characters like O, I
+  const chars = '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   let randomPart = '';
-  for (let i = 0; i < 6; i++) {
-    randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
+  for (let i = 0; i < 6; i++) randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
   const code = `FG-${randomPart}`;
   const createdAt = new Date().toISOString();
 
-  const record: PairingRecord = {
-    deviceId,
-    childId: `child_${deviceId}`,
-    pairingCode: code,
-    status: 'pending',
-    createdAt,
-    lastSeen: createdAt,
-    timestamp: createdAt,
-  };
-
   if (database) {
     try {
-      const rawUpdates = {
+      const updates = {
         [`devices/${code}`]: {
-          ...record,
-          deviceModelName: modelName,
+          deviceId,
+          childId: `child_${deviceId}`,
+          pairingCode: code,
           status: 'pending',
+          createdAt,
           online: true,
-        },
-        [`pairings/${code}`]: {
-          ...record,
           deviceModelName: modelName,
-          status: 'pending',
-          online: true,
-        },
-        [`pairing_codes/${deviceId}`]: record,
+        }
       };
-      await update(ref(database), sanitizeForRTDB(rawUpdates));
-    } catch (e) {
-      console.warn('Could not save pairing code to Firebase:', e);
-    }
+      await update(ref(database), updates);
+    } catch (e) { console.warn(e); }
   }
-
   return code;
 };
 

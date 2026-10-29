@@ -30,8 +30,8 @@ import {
   BarChart3,
   Plus
 } from 'lucide-react';
-import { auth, database, sanitizeForRTDB, subscribeToChildDevices, getCurrentParent, saveParentSession, clearParentSession, pairChildDevice, unlinkChildDevice, signInWithEmail, signOut as fbSignOut, onAuthStateChanged } from './services/firebase';
-import { ref, update, onValue, off, set } from 'firebase/database';
+import { auth, database, sanitizeForRTDB, subscribeToChildDevices, getCurrentParent, saveParentSession, clearParentSession, pairChildDevice, unlinkChildDevice, signInWithEmail, signOut as fbSignOut, onAuthStateChanged, getOrCreateChildPairingCode } from './services/firebase';
+import { ref, update, onValue, off, set, onDisconnect } from 'firebase/database';
 import { ParentChildDevice, ConsoleNavSection } from './types';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
@@ -55,8 +55,12 @@ export const App: React.FC = () => {
     return !!localStorage.getItem('kidguard_auth_user');
   });
   const [currentUser, setCurrentUser] = useState<{ uid: string; email: string } | null>(() => {
-    const raw = localStorage.getItem('kidguard_auth_user');
-    return raw ? JSON.parse(raw) : null;
+    try {
+      const raw = localStorage.getItem('kidguard_auth_user');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
   });
 
   // Role Selection State
@@ -104,7 +108,6 @@ export const App: React.FC = () => {
   };
   const [pairingCode, setPairingCode] = useState<string>(() => generateFlashGetCode());
   const [copied, setCopied] = useState<boolean>(false);
-  const [secondsRemaining, setSecondsRemaining] = useState<number>(300);
 
   // Dynamic Battery Telemetry
   const [batteryLevel, setBatteryLevel] = useState<number>(0);
@@ -140,6 +143,19 @@ export const App: React.FC = () => {
   
   // Tracking which parent has claimed this child
   const [parentLink, setParentLink] = useState<{ parentUid: string; childId: string } | null>(null);
+
+  // New effect to handle persistent pairing code in child mode
+  useEffect(() => {
+    if (selectedRole === 'child' && currentUser && auth) {
+      const fetchPersistentCode = async () => {
+        const code = await getOrCreateChildPairingCode(currentUser.uid, `dev_${currentUser.uid.slice(0, 8)}`, deviceModel);
+        if (code) {
+          setPairingCode(code);
+        }
+      };
+      fetchPersistentCode();
+    }
+  }, [selectedRole, currentUser]);
 
   const guardian = {
     name: "Account Owner",
@@ -186,6 +202,36 @@ export const App: React.FC = () => {
       unsubscribe();
     };
   }, [selectedRole, currentUser]);
+
+  // Auto-open Add Child Modal if no devices are linked (Onboarding)
+  useEffect(() => {
+    if (selectedRole === 'parent' && isAuthenticated && devices.length === 0) {
+      setIsAddChildModalOpen(true);
+    }
+  }, [selectedRole, isAuthenticated, devices.length]);
+
+  // ----------------------------------------------------
+  // Child Device: Presence Logic (Online/Offline)
+  // ----------------------------------------------------
+  useEffect(() => {
+    if (selectedRole !== 'child' || !database || !pairingCode) return;
+
+    const presenceRef = ref(database, `devices/${pairingCode}/presence/online`);
+    
+    // Set to true when the component mounts (online)
+    set(presenceRef, true);
+    
+    // Set to false when the connection is lost or the app is closed
+    onDisconnect(presenceRef).set(false);
+
+    // Also update parent console sync if logged in
+    if (currentUser) {
+      const childId = `browser_${currentUser.uid.slice(0, 8)}`;
+      const parentPresenceRef = ref(database, `parents/${currentUser.uid}/children/${childId}/presence/online`);
+      set(parentPresenceRef, true);
+      onDisconnect(parentPresenceRef).set(false);
+    }
+  }, [selectedRole, pairingCode, currentUser]);
 
   // ----------------------------------------------------
   // Child Device: Battery & GPS Telemetry Push to RTDB
@@ -244,18 +290,21 @@ export const App: React.FC = () => {
       
       // Sync to parent console directly if linked or if using same account
       if (currentUser) {
-        const childId = `browser_${currentUser.uid.slice(0, 8)}`;
-        const parentTelemetryPath = `parents/${currentUser.uid}/children/${childId}/telemetry`;
-        update(ref(database, parentTelemetryPath), {
-          batteryLevel,
-          isCharging,
-          updatedAt: Date.now(),
+        const childId = `child_dev_${currentUser.uid.slice(0, 8)}`; // Consistent with getOrCreateChildPairingCode
+        const parentDevicePath = `parents/${currentUser.uid}/children/${childId}`;
+        
+        // Enforce 1-device limit: Clear existing children before updating this one if it's different
+        // Actually, since childId is derived from uid, it will always overwrite itself.
+        // But let's make sure we also update the device record.
+        
+        update(ref(database, parentDevicePath), {
+          ...payload,
+          childId,
+          status: 'synced',
+          isOnline: true,
+          lastSeen: new Date().toISOString(),
         });
-        update(ref(database, `parents/${currentUser.uid}/children/${childId}/location`), location);
-        update(ref(database, `parents/${currentUser.uid}/children/${childId}/presence`), {
-          online: true,
-          heartbeatAt: Date.now(),
-        });
+        
         // Ensure childId is set for backward compatibility commands
         if (!parentLink) setParentLink({ parentUid: currentUser.uid, childId });
       }
@@ -313,14 +362,7 @@ export const App: React.FC = () => {
     return () => off(deviceRef);
   }, [pairingCode, selectedRole]);
 
-  // Child code timer
-  useEffect(() => {
-    if (selectedRole !== 'child') return;
-    const interval = setInterval(() => {
-      setSecondsRemaining((prev) => (prev > 0 ? prev - 1 : 300));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [selectedRole]);
+
 
   // Real Hardware Battery API Listener
   useEffect(() => {
@@ -440,12 +482,22 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleQuickDemoAuth = () => {
-    const demo = { uid: 'parent_demo_01', email: 'kadimpatimoshe@gmail.com' };
-    saveParentSession(demo);
-    setCurrentUser(demo);
-    setIsAuthenticated(true);
-    showToast('Demo Account Logged In');
+  const handleQuickDemoAuth = async () => {
+    // Attempt to log in with a known demo account to ensure real Firebase Auth
+    // If this fails, we fall back to a mock but warn the user.
+    try {
+      const user = await signInWithEmail('kadimpatimoshe@gmail.com', 'secret123');
+      if (user) {
+        showToast('Demo Account Logged In');
+      }
+    } catch (err) {
+      console.warn('Demo login failed, using local mock mode:', err);
+      const demo = { uid: 'parent_demo_01', email: 'kadimpatimoshe@gmail.com' };
+      saveParentSession(demo);
+      setCurrentUser(demo);
+      setIsAuthenticated(true);
+      showToast('Demo Account (Offline Mode) Active');
+    }
   };
 
   const handleSignOut = async () => {
@@ -521,18 +573,31 @@ export const App: React.FC = () => {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleGenerateNewCode = () => {
-    const newCode = generateFlashGetCode();
+  const handleGenerateNewCode = async () => {
+    if (!currentUser) {
+      showToast('Please log in first to regenerate code');
+      return;
+    }
+    const chars = '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+    let res = '';
+    for (let i = 0; i < 6; i++) res += chars.charAt(Math.floor(Math.random() * chars.length));
+    const newCode = `FG-${res}`;
+    
     setPairingCode(newCode);
-    setSecondsRemaining(300);
     showToast(`Fresh binding code generated: ${newCode}`);
+    
     if (database) {
-      update(ref(database, `devices/${newCode}`), {
-        status: 'pending',
-        pairingCode: newCode,
-        deviceModelName: deviceModel,
-        updatedAt: Date.now(),
-      });
+      const updates: Record<string, any> = {
+        [`user_pairing_codes/${currentUser.uid}`]: newCode,
+        [`devices/${newCode}`]: {
+          pairingCode: newCode,
+          deviceModelName: deviceModel,
+          status: 'pending',
+          online: true,
+          updatedAt: Date.now(),
+        }
+      };
+      await update(ref(database), updates);
     }
   };
 
@@ -549,12 +614,12 @@ export const App: React.FC = () => {
   const handleUnlinkDevice = async (device: ParentChildDevice) => {
     if (!currentUser) return;
     if (confirm(`Are you sure you want to unlink ${device.deviceModelName}?`)) {
-      await unlinkChildDevice(currentUser.uid, device.childId);
-      setDevices((prev) => prev.filter((d) => d.childId !== device.childId));
-      if (selectedDevice?.childId === device.childId) {
-        setSelectedDevice(devices.find((d) => d.childId !== device.childId) || null);
+      try {
+        await unlinkChildDevice(currentUser.uid, device.childId);
+        showToast(`Unlinked ${device.deviceModelName}`);
+      } catch (err: any) {
+        showToast(`Error unlinking: ${err.message}`);
       }
-      showToast(`Unlinked ${device.deviceModelName}`);
     }
   };
 
@@ -837,9 +902,6 @@ export const App: React.FC = () => {
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/10 text-white/90">
                 <Wifi className="w-3 h-3 text-emerald-400" />
                 Firebase RTDB: /devices/{pairingCode}
-              </span>
-              <span className="text-emerald-300 font-mono text-[10px]">
-                Expires in: {Math.floor(secondsRemaining / 60)}:{(secondsRemaining % 60).toString().padStart(2, '0')}
               </span>
             </div>
           </div>

@@ -144,7 +144,8 @@ export const AddChildModal: React.FC<AddChildModalProps> = ({ onClose, onPair })
               </div>
               <h3 className="text-xl font-extrabold text-[#202b29]">Add Child Device</h3>
               <p className="text-xs text-[#71807b] mt-1">
-                Enter the binding code (e.g. <strong>FG-XXXXXX</strong>) displayed on your child's device to link it to this console.
+                Enter the binding code (e.g. <strong>FG-XXXXXX</strong>) displayed on your child's device. 
+                <span className="block mt-1 font-bold text-amber-600">Note: This will replace your current linked device.</span>
               </p>
             </div>
 

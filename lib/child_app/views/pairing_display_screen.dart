@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../viewmodels/child_view_model.dart';
 
-/// Screen displayed before pairing, showing the 4-digit code and countdown timer
+/// Screen displayed before pairing, showing the FlashGet style binding code.
+/// Simplified as requested (no countdown timers).
 class PairingDisplayScreen extends StatelessWidget {
   final ChildViewModel viewModel;
 
@@ -10,23 +11,18 @@ class PairingDisplayScreen extends StatelessWidget {
     required this.viewModel,
   }) : super(key: key);
 
-  String _formatTimer(int seconds) {
-    final mins = seconds ~/ 60;
-    final secs = seconds % 60;
-    return '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final code = viewModel.pairingCode;
-    final seconds = viewModel.secondsRemaining;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF4F6F4),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0.5,
+        centerTitle: true,
         title: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
               padding: const EdgeInsets.all(6),
@@ -42,7 +38,7 @@ class PairingDisplayScreen extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             const Text(
-              'KidGuard Child Companion',
+              'KidGuard Pro',
               style: TextStyle(
                 color: Color(0xFF1D302B),
                 fontSize: 16,
@@ -59,17 +55,17 @@ class PairingDisplayScreen extends StatelessWidget {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Top phone illustration badge
+                // Illustration badge
                 Container(
-                  width: 80,
-                  height: 80,
+                  width: 84,
+                  height: 84,
                   decoration: BoxDecoration(
                     color: Colors.white,
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withOpacity(0.04),
-                        blurRadius: 16,
+                        blurRadius: 20,
                         offset: const Offset(0, 4),
                       ),
                     ],
@@ -77,63 +73,63 @@ class PairingDisplayScreen extends StatelessWidget {
                   child: const Center(
                     child: Icon(
                       Icons.phonelink_setup_rounded,
-                      size: 40,
+                      size: 44,
                       color: Color(0xFF0A9B70),
                     ),
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 28),
 
                 const Text(
-                  'Pair with Parent Console',
+                  'Link with Parent Console',
                   style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
                     color: Color(0xFF1D302B),
                     letterSpacing: -0.5,
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 12),
                 const Text(
-                  'Enter this 4-digit code in the KidGuard Parent Web Dashboard to activate real-time GPS tracking, camera streaming, and telemetry sync.',
+                  'Enter the binding code displayed below in your parent’s KidGuard Pro dashboard to establish a secure link.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 14,
                     color: Color(0xFF71807B),
-                    height: 1.4,
+                    height: 1.5,
                   ),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 40),
 
-                // 4-Digit Code Box Container
+                // Binding Code Container
                 Container(
-                  padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+                  padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 20),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(24),
                     border: Border.all(color: const Color(0xFFE4E9E5)),
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withOpacity(0.03),
-                        blurRadius: 20,
-                        offset: const Offset(0, 6),
+                        blurRadius: 30,
+                        offset: const Offset(0, 8),
                       ),
                     ],
                   ),
                   child: Column(
                     children: [
                       const Text(
-                        'YOUR 4-DIGIT PAIRING CODE',
+                        'CHILD BINDING CODE',
                         style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
                           color: Color(0xFF71807B),
-                          letterSpacing: 1.2,
+                          letterSpacing: 2.0,
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 24),
 
-                      // Code Digit Cards
+                      // Code Display
                       SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: Row(
@@ -141,37 +137,36 @@ class PairingDisplayScreen extends StatelessWidget {
                           children: code.split('').map((char) {
                             if (char == '-') {
                               return const Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 4),
+                                padding: EdgeInsets.symmetric(horizontal: 6),
                                 child: Text(
                                   '-',
                                   style: TextStyle(
-                                    fontSize: 28,
+                                    fontSize: 32,
                                     fontWeight: FontWeight.bold,
-                                    color: Color(0xFF71807B),
+                                    color: Color(0xFFE4E9E5),
                                   ),
                                 ),
                               );
                             }
-                            final isLong = code.length > 5;
                             return Container(
-                              margin: EdgeInsets.symmetric(horizontal: isLong ? 3 : 5),
-                              width: isLong ? 38 : 52,
-                              height: isLong ? 52 : 62,
+                              margin: const EdgeInsets.symmetric(horizontal: 4),
+                              width: 44,
+                              height: 60,
                               decoration: BoxDecoration(
                                 color: const Color(0xFFF9FAF9),
-                                borderRadius: BorderRadius.circular(10),
+                                borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
-                                  color: const Color(0xFF0A9B70).withOpacity(0.5),
+                                  color: const Color(0xFF0A9B70).withOpacity(0.3),
                                   width: 1.5,
                                 ),
                               ),
                               child: Center(
                                 child: Text(
                                   char,
-                                  style: TextStyle(
-                                    fontSize: isLong ? 24 : 30,
+                                  style: const TextStyle(
+                                    fontSize: 28,
                                     fontWeight: FontWeight.w900,
-                                    color: const Color(0xFF1D302B),
+                                    color: Color(0xFF1D302B),
                                     fontFamily: 'monospace',
                                   ),
                                 ),
@@ -180,76 +175,42 @@ class PairingDisplayScreen extends StatelessWidget {
                           }).toList(),
                         ),
                       ),
-                      const SizedBox(height: 20),
-
-                      // Countdown & Expiry Pill
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFFBEB),
-                          borderRadius: BorderRadius.circular(30),
-                          border: Border.all(color: const Color(0xFFFDE68A)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.timer_outlined,
-                              size: 14,
-                              color: Color(0xFFB45309),
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              'Code expires in ${_formatTimer(seconds)}',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFFB45309),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                      const SizedBox(height: 12),
                     ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-
-                // Regenerate Code Button
-                OutlinedButton.icon(
-                  onPressed: () => viewModel.generateNewPairingCode(),
-                  icon: const Icon(Icons.refresh_rounded, size: 16),
-                  label: const Text(
-                    'Generate New Code',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF0A9B70),
-                    side: const BorderSide(color: Color(0xFF0A9B70)),
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
                   ),
                 ),
                 const SizedBox(height: 32),
 
-                // Device Hardware Info
+                // Manual Refresh Button
+                TextButton.icon(
+                  onPressed: () => viewModel.generateNewPairingCode(),
+                  icon: const Icon(Icons.refresh_rounded, size: 18, color: Color(0xFF0A9B70)),
+                  label: const Text(
+                    'Regenerate Code',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF0A9B70),
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                
+                const SizedBox(height: 48),
+
+                // Hardware attributes summary
                 Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
+                    color: Colors.white.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(color: const Color(0xFFE4E9E5)),
                   ),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      _buildInfoColumn('DEVICE MODEL', viewModel.deviceModelName),
-                      Container(width: 1, height: 28, color: const Color(0xFFE4E9E5)),
+                      _buildInfoColumn('HARDWARE', viewModel.deviceModelName.split('•').first.trim()),
                       _buildInfoColumn('BATTERY', '${viewModel.batteryLevel}%'),
-                      Container(width: 1, height: 28, color: const Color(0xFFE4E9E5)),
-                      _buildInfoColumn('STATUS', 'Waiting for Parent'),
+                      _buildInfoColumn('STATE', 'WAITING'),
                     ],
                   ),
                 ),
@@ -268,17 +229,19 @@ class PairingDisplayScreen extends StatelessWidget {
         Text(
           title,
           style: const TextStyle(
-            fontSize: 9,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF71807B),
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            color: Color(0xFF9CA3AF),
+            letterSpacing: 0.5,
           ),
         ),
-        const SizedBox(height: 2),
+        const SizedBox(height: 4),
         Text(
           value,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(
             fontSize: 12,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.bold,
             color: Color(0xFF1D302B),
           ),
         ),

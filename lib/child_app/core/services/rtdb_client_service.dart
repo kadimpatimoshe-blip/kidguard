@@ -74,6 +74,19 @@ class RtdbClientService {
     }
   }
 
+  /// Deletes data at a specific path under Firebase RTDB
+  Future<bool> deletePath(String path) async {
+    try {
+      final cleanPath = path.startsWith('/') ? path.substring(1) : path;
+      final uri = Uri.parse('$databaseUrl/$cleanPath.json');
+      
+      final response = await _httpClient.delete(uri);
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (e) {
+      return false;
+    }
+  }
+
   void dispose() {
     _httpClient.close();
   }

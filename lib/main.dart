@@ -44,6 +44,13 @@ class _KidGuardAppState extends State<KidGuardApp> {
       _isAuthenticated = authed;
       _currentRole = _authService.selectedRole;
       _isInitialized = true;
+      
+      if (_isAuthenticated && _currentRole == 'child' && _authService.currentUserId != null) {
+        _childViewModel.setAuthenticatedUser(
+          _authService.currentUserId!, 
+          _authService.currentUserEmail ?? 'kadimpatimoshe@gmail.com'
+        );
+      }
     });
   }
 

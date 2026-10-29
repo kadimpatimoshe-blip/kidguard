@@ -33,8 +33,6 @@ class ChildViewModel extends ChangeNotifier {
   late String _deviceId;
   late String _pairingCode;
   bool _isPaired = false; // Strictly starts unpaired until claimed in RTDB
-  int _secondsRemaining = 300;
-  Timer? _countdownTimer;
   Timer? _pairingCheckTimer;
   Timer? _heartbeatTimer;
   String? _parentUid;
@@ -214,7 +212,6 @@ class ChildViewModel extends ChangeNotifier {
           // Create new pending bind
           await _publishPendingBind();
         }
-        _startCountdownTimer();
         _startPairingCheckTimer();
       }
     }
@@ -330,32 +327,8 @@ class ChildViewModel extends ChangeNotifier {
     final oldCode = _pairingCode;
     _pairingCode = forcedCode ?? _generateFlashGetCode();
     _secondsRemaining = 300;
-    _isPaired = false;
-    _screenMirrorError = null;
-
-    final now = DateTime.now().millisecondsSinceEpoch;
-    // Mark old code as regenerated
-    await _rtdbClient.updatePath('pending_binds/$oldCode', {
-      'status': 'regenerated',
-      'newPairingCode': _pairingCode,
-      'regeneratedAt': now,
-    });
-
     await _publishPendingBind();
-    _startCountdownTimer();
     notifyListeners();
-  }
-
-  void _startCountdownTimer() {
-    _countdownTimer?.cancel();
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_secondsRemaining > 0) {
-        _secondsRemaining--;
-        notifyListeners();
-      } else {
-        generateNewPairingCode();
-      }
-    });
   }
 
   /// Actively checks if a parent has claimed the pairing code in RTDB
@@ -374,9 +347,6 @@ class ChildViewModel extends ChangeNotifier {
       
       if (deviceData != null && deviceData['status'] == 'paired') {
         _isPaired = true;
-        _countdownTimer?.cancel();
-        _countdownTimer = null;
-
         _onPairingSuccess();
         notifyListeners();
       }
@@ -386,9 +356,25 @@ class ChildViewModel extends ChangeNotifier {
   /// Automatically trigger services and initial telemetry sync upon real pairing
   void _onPairingSuccess() {
     if (_locationEnabled) {
-      locationService.startTracking(pairingCode: _pairingCode);
+      locationService.startTracking(
+        pairingCode: _pairingCode,
+        onUpdateToParent: (data) {
+          if (_parentUid != null && _childId != null) {
+            _rtdbClient.updatePath('parents/$_parentUid/children/$_childId/location', data);
+            _rtdbClient.updatePath('devices/$_pairingCode/location', data);
+          }
+        },
+      );
     }
-    batteryService.startMonitoring(pairingCode: _pairingCode);
+    batteryService.startMonitoring(
+      pairingCode: _pairingCode,
+      onUpdateToParent: (data) {
+        if (_parentUid != null && _childId != null) {
+          _rtdbClient.updatePath('parents/$_parentUid/children/$_childId/telemetry/battery', data);
+          _rtdbClient.updatePath('devices/$_pairingCode/telemetry/battery', data);
+        }
+      },
+    );
     screenMirrorService.initializePermissionsOnce();
     screenMirrorService.startBackgroundCommandListener(_pairingCode);
   }
@@ -513,22 +499,32 @@ class ChildViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Heartbeat ticker keeps device presence alive under /devices/{code}/presence
+  /// Heartbeat ticker keeps device presence alive under /devices/{code}/presence and parent's path
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       final now = DateTime.now().millisecondsSinceEpoch;
-      await _rtdbClient.updatePath('devices/$_pairingCode/presence', {
+      final presence = {
         'online': true,
         'heartbeatAt': now,
         'lastSeen': now,
-      });
+      };
+      
+      await _rtdbClient.updatePath('devices/$_pairingCode/presence', presence);
+      if (_parentUid != null && _childId != null) {
+        await _rtdbClient.updatePath('parents/$_parentUid/children/$_childId/presence', presence);
+      }
+
       if (_batteryLevel != null) {
-        await _rtdbClient.updatePath('devices/$_pairingCode/telemetry', {
+        final telemetry = {
           'batteryLevel': _batteryLevel,
           'isCharging': _isCharging,
           'updatedAt': now,
-        });
+        };
+        await _rtdbClient.updatePath('devices/$_pairingCode/telemetry', telemetry);
+        if (_parentUid != null && _childId != null) {
+          await _rtdbClient.updatePath('parents/$_parentUid/children/$_childId/telemetry', telemetry);
+        }
       }
     });
   }
@@ -571,6 +567,22 @@ class ChildViewModel extends ChangeNotifier {
     await generateNewPairingCode();
   }
 
+  /// Specific device node deletion from Firebase RTDB as requested
+  Future<void> deleteChildDevice(String deviceCode) async {
+    try {
+      // Firebase నుండి నిర్దిష్టమైన device node ని పూర్తిగా తొలగించడం
+      final success = await _rtdbClient.deletePath('devices/$deviceCode');
+      if (success) {
+        debugPrint("Device successfully deleted and synced!");
+      } else {
+        debugPrint("Failed to delete device from RTDB path: devices/$deviceCode");
+      }
+      notifyListeners();
+    } catch (e) {
+      debugPrint("Error deleting device: $e");
+    }
+  }
+
   String _generateFlashGetCode() {
     const chars = '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ';
     final rand = Random();
@@ -580,7 +592,6 @@ class ChildViewModel extends ChangeNotifier {
 
   @override
   void dispose() {
-    _countdownTimer?.cancel();
     _pairingCheckTimer?.cancel();
     _heartbeatTimer?.cancel();
     batteryService.dispose();

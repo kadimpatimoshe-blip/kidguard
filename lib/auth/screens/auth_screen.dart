@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import '../auth_service.dart';
 
-// No longer using PIN passcode, only Email & Password
-
 /// Onboarding Login / Register Screen for KidGuard
-/// Supports Passcode (PIN) access and Email & Password authentication
+/// Simplified to Email & Password authentication for FlashGet Kids style account linking.
 class AuthScreen extends StatefulWidget {
   final VoidCallback onAuthenticated;
 
@@ -19,87 +17,19 @@ class AuthScreen extends StatefulWidget {
 
 class _AuthScreenState extends State<AuthScreen> {
   final AuthService _authService = AuthService();
-  // Default to Email/Password
+  final TextEditingController _emailController = TextEditingController(text: 'kadimpatimoshe@gmail.com');
+  final TextEditingController _passwordController = TextEditingController(text: 'secret123');
+  
   bool _isRegistering = false;
   bool _obscurePassword = true;
   bool _isLoading = false;
   String? _emailError;
 
   @override
-  void initState() {
-    super.initState();
-    _isSettingNewPin = !_authService.hasPasscode;
-  }
-
-  @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
-  }
-
-  void _onKeypadTap(String value) {
-    if (_enteredPin.length < _pinLength) {
-      setState(() {
-        _enteredPin += value;
-        _passcodeError = null;
-      });
-
-      if (_enteredPin.length == _pinLength) {
-        _handlePinSubmit();
-      }
-    }
-  }
-
-  void _onBackspace() {
-    if (_enteredPin.isNotEmpty) {
-      setState(() {
-        _enteredPin = _enteredPin.substring(0, _enteredPin.length - 1);
-        _passcodeError = null;
-      });
-    }
-  }
-
-  void _onClearPin() {
-    setState(() {
-      _enteredPin = '';
-      _passcodeError = null;
-    });
-  }
-
-  Future<void> _handlePinSubmit() async {
-    if (_isSettingNewPin) {
-      if (_firstEnteredPin == null) {
-        // Step 1: Save first entry, ask to confirm
-        setState(() {
-          _firstEnteredPin = _enteredPin;
-          _enteredPin = '';
-        });
-      } else {
-        // Step 2: Confirm entered pin
-        if (_enteredPin == _firstEnteredPin) {
-          await _authService.setPasscode(_enteredPin);
-          await _authService.verifyPasscode(_enteredPin);
-          widget.onAuthenticated();
-        } else {
-          setState(() {
-            _passcodeError = 'Passcodes do not match. Please try again.';
-            _enteredPin = '';
-            _firstEnteredPin = null;
-          });
-        }
-      }
-    } else {
-      final success = await _authService.verifyPasscode(_enteredPin);
-      if (success) {
-        widget.onAuthenticated();
-      } else {
-        setState(() {
-          _passcodeError = 'Incorrect passcode. Try again.';
-          _enteredPin = '';
-        });
-      }
-    }
   }
 
   Future<void> _handleEmailSubmit() async {
@@ -135,11 +65,6 @@ class _AuthScreenState extends State<AuthScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  void _handleQuickDemo() {
-    _authService.signInAsDemo('parent');
-    widget.onAuthenticated();
   }
 
   @override
@@ -181,7 +106,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   const SizedBox(height: 16),
 
                   const Text(
-                    'KidGuard Protection',
+                    'KidGuard Pro',
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.w800,
@@ -189,28 +114,29 @@ class _AuthScreenState extends State<AuthScreen> {
                       letterSpacing: -0.5,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 8),
                   Text(
-                    _authMode == AuthMode.passcode
-                        ? (_isSettingNewPin
-                            ? (_firstEnteredPin == null ? 'Set a 4-Digit Passcode to secure this app' : 'Re-enter your 4-digit Passcode')
-                            : 'Enter your 4-Digit Passcode to unlock')
-                        : (_isRegistering ? 'Create your account to safeguard family devices' : 'Log in to your KidGuard account'),
+                    _isRegistering 
+                        ? 'Create your account to safeguard family devices' 
+                        : 'Log in to your KidGuard account',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 13,
                       color: Color(0xFF71807B),
                     ),
                   ),
+                  const SizedBox(height: 24),
+                  
                   _buildEmailSection(),
 
                   const SizedBox(height: 20),
 
-                  // Quick Demo Login Button (Parent role)
+                  // Quick Demo Login Button
                   TextButton.icon(
                     onPressed: () {
-                      _authService.signInAsDemo('parent');
-                      widget.onAuthenticated();
+                      _emailController.text = 'kadimpatimoshe@gmail.com';
+                      _passwordController.text = 'secret123';
+                      _handleEmailSubmit();
                     },
                     icon: const Icon(Icons.bolt_rounded, size: 16, color: Color(0xFF0A9B70)),
                     label: const Text(
@@ -223,135 +149,6 @@ class _AuthScreenState extends State<AuthScreen> {
                     ),
                   ),
                 ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // Removing PIN logic as requested
-
-  Widget _buildPasscodeSection() {
-    return Column(
-      children: [
-        // PIN Dot Indicators
-        Container(
-          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFE4E9E5)),
-          ),
-          child: Column(
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(_pinLength, (index) {
-                  final isFilled = index < _enteredPin.length;
-                  return AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    margin: const EdgeInsets.symmetric(horizontal: 10),
-                    width: 18,
-                    height: 18,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isFilled ? const Color(0xFF0A9B70) : Colors.transparent,
-                      border: Border.all(
-                        color: isFilled ? const Color(0xFF0A9B70) : const Color(0xFFCBD5E1),
-                        width: 2,
-                      ),
-                    ),
-                  );
-                }),
-              ),
-              if (_passcodeError != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _passcodeError!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFFE11D48),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-        const SizedBox(height: 20),
-
-        // Custom Keypad (0-9)
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            mainAxisSpacing: 10,
-            crossAxisSpacing: 10,
-            childAspectRatio: 1.6,
-          ),
-          itemCount: 12,
-          itemBuilder: (context, index) {
-            if (index == 9) {
-              // Clear Button
-              return TextButton(
-                onPressed: _enteredPin.isEmpty ? null : _onClearPin,
-                child: const Text(
-                  'Clear',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF71807B),
-                  ),
-                ),
-              );
-            } else if (index == 10) {
-              // Digit '0'
-              return _buildKeypadButton('0');
-            } else if (index == 11) {
-              // Backspace Button
-              return IconButton(
-                onPressed: _enteredPin.isEmpty ? null : _onBackspace,
-                icon: const Icon(
-                  Icons.backspace_outlined,
-                  color: Color(0xFF1D302B),
-                  size: 20,
-                ),
-              );
-            } else {
-              // Digits 1-9
-              final digit = (index + 1).toString();
-              return _buildKeypadButton(digit);
-            }
-          },
-        ),
-      ],
-    );
-  }
-
-  Widget _buildKeypadButton(String digit) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(14),
-      elevation: 0,
-      child: InkWell(
-        onTap: () => _onKeypadTap(digit),
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFFE4E9E5)),
-          ),
-          child: Center(
-            child: Text(
-              digit,
-              style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF1D302B),
               ),
             ),
           ),
