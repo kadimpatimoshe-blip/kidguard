@@ -1,43 +1,38 @@
-name: kidguard
-description: A feature-rich Android Parental Control application using MVVM architecture.
-publish_to: 'none'
-
+name: kidguard_child
+description: "KidGuard Child Protection Client - Android 14+ Native & Flutter Companion"
+publish_to: "none"
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.6.2 <4.0.0'
-  flutter: '>=3.27.4'
+  sdk: ">=3.2.0 <4.0.0"
+  flutter: ">=3.16.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  
-  # State Management (MVVM Architecture)
-  provider: ^6.1.1
 
-  # Firebase child pairing
-  firebase_auth: ^6.7.0
-  firebase_core: ^4.15.0
-  firebase_database: ^12.6.0
-
-  # Dashboard charts and network connectivity
-  connectivity_plus: ^7.3.2
-  fl_chart: ^1.2.0
-
-  # Live Camera & Audio / Screen Mirroring Streaming
-  flutter_webrtc: ^1.6.2
-
-  # Permissions handling for Camera, Storage, etc.
+  # Device Telemetry & Sensors
+  battery_plus: ^6.1.0
+  geolocator: ^13.0.1
+  device_info_plus: ^10.1.2
+  wakelock_plus: ^1.2.8
   permission_handler: ^11.3.1
 
-  # Local Database to store intercepted messages and notifications
-  hive: ^2.2.3
-  hive_flutter: ^1.1.0
-  flutter_background_service: ^5.1.0
-  shared_preferences: ^2.5.6
-  device_info_plus: ^13.3.0
-  geolocator: ^14.0.1
-  usage_stats: ^2.0.1
+  # Firebase Realtime Database & Core
+  firebase_core: ^3.6.0
+  firebase_database: ^11.1.4
+  firebase_auth: ^5.0.0
+  shared_preferences: ^2.2.3
+  http: ^1.2.2
+
+  # WebRTC & Media Streaming
+  flutter_webrtc: ^0.11.7
+
+  # Background Services & OEM Persistence (Android 14 API 34)
+  flutter_foreground_task: ^8.1.0
+
+  # Utilities
+  intl: ^0.19.0
 
 dev_dependencies:
   flutter_test:

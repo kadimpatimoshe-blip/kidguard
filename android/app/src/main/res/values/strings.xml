@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="accessibility_service_description">KidGuard Accessibility Service for Parental Controls</string>
+    <string name="app_name">KidGuard</string>
+    <string name="accessibility_service_description">KidGuard Accessibility Service protects children by monitoring active applications, enforcing parental screen time limits, and blocking inappropriate web content.</string>
 </resources>

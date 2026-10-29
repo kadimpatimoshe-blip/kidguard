@@ -1,0 +1,6 @@
+{
+  "name": "KidGuard Kid Pro",
+  "description": "Professional child protection suite with real-time GPS tracking, screen mirroring, and remote camera monitoring.",
+  "permissions": [],
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "Parent": {
+      "title": "Parent",
+      "description": "Guardian user who monitors children.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
+    },
+    "ChildDevice": {
+      "title": "Child Device",
+      "description": "Linked device being monitored.",
+      "type": "object",
+      "properties": {
+        "deviceId": { "type": "string" },
+        "pairingCode": { "type": "string" },
+        "deviceModelName": { "type": "string" },
+        "parentUid": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "active", "synced", "unlinked"] },
+        "isOnline": { "type": "boolean" },
+        "lastSeen": { "type": "string", "format": "date-time" }
+      },
+      "required": ["deviceId", "pairingCode", "parentUid", "status"]
+    },
+    "Location": {
+      "title": "Location Fix",
+      "description": "GPS coordinate fix from device.",
+      "type": "object",
+      "properties": {
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "accuracy": { "type": "number" },
+        "speed": { "type": "number" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["latitude", "longitude", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/parents/{parentUid}": {
+      "schema": "Parent",
+      "description": "Parent profile and metadata."
+    },
+    "/parents/{parentUid}/children/{deviceId}": {
+      "schema": "ChildDevice",
+      "description": "List of children devices associated with this parent."
+    },
+    "/devices/{pairingCode}": {
+      "schema": "ChildDevice",
+      "description": "Global device registry by pairing code for initial bind."
+    }
+  }
+}
