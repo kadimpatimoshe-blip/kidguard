@@ -12,7 +12,7 @@ if (localPropertiesFile.exists()) {
     }
 }
 
-project.ext.set("kotlin_version", "1.9.24")
+project.ext.set("kotlin_version", "2.2.20")
 
 def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
 if (flutterVersionCode == null) {
@@ -26,7 +26,7 @@ if (flutterVersionName == null) {
 
 android {
     namespace "com.kidguard.child"
-    compileSdk 34
+    compileSdk 35
     ndkVersion flutter.ndkVersion
 
     compileOptions {
@@ -46,7 +46,7 @@ android {
         applicationId "com.kidguard.child"
         // Required for WebRTC and modern foreground services
         minSdkVersion 24
-        targetSdkVersion 34
+        targetSdkVersion 35
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
 
