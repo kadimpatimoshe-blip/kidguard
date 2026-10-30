@@ -37,6 +37,10 @@ class ChildViewModel extends ChangeNotifier {
   Timer? _heartbeatTimer;
   String? _parentUid;
   String? _childId;
+  int _secondsRemaining = 300;
+  String? _guardianEmail;
+  String? _guardianName;
+  String? _guardianPhone;
 
   // Feature Toggles
   bool _locationEnabled = true;
@@ -53,8 +57,6 @@ class ChildViewModel extends ChangeNotifier {
   bool _isCharging = false;
   String _batteryStateStr = 'unknown';
   String _deviceModelName = 'Android Device (API 34)';
-  String? _parentUid;
-  String? _childId;
   String? _stableHardwareId;
 
   ChildViewModel({
@@ -252,7 +254,8 @@ class ChildViewModel extends ChangeNotifier {
             ? '${androidInfo.brand[0].toUpperCase()}${androidInfo.brand.substring(1)}'
             : 'Android';
         final sdk = androidInfo.version.sdkInt;
-        _deviceModelName = '$brand $model • Android (API $sdk)';
+        final deviceModel = androidInfo.model;
+        _deviceModelName = '$brand $deviceModel • Android (API $sdk)';
         // Use androidId or serial if possible for stable identity
         _stableHardwareId = androidInfo.id.replaceAll(RegExp(r'\W'), '_');
       } else {
@@ -391,30 +394,31 @@ class ChildViewModel extends ChangeNotifier {
         String? commandError;
 
         try {
-          if (cmd == 'startStream') {
+          final cmdLower = cmd.toLowerCase();
+          if (cmdLower == 'startstream') {
             await cameraStreamService.startStream(pairingCode: _pairingCode);
-          } else if (cmd == 'stopStream') {
+          } else if (cmdLower == 'stopstream') {
             await cameraStreamService.stopStream(_pairingCode);
-          } else if (cmd == 'switchCamera') {
+          } else if (cmdLower == 'switchcamera') {
             await cameraStreamService.switchCamera(
               pairingCode: _pairingCode,
               preferredFacing: control['cameraFacing'] as String?,
             );
-          } else if (cmd == 'toggleAudioMute') {
+          } else if (cmdLower == 'toggleaudiomute') {
             await cameraStreamService.toggleAudioMute(_pairingCode);
-          } else if (cmd == 'startScreenShare') {
+          } else if (cmdLower == 'startscreenshare') {
             final started = await startScreenMirror();
             if (!started) {
               commandSuccess = false;
               commandError = _screenMirrorError ?? 'MediaProjection permission denied by child';
             }
-          } else if (cmd == 'stopScreenShare') {
+          } else if (cmdLower == 'stopscreenshare') {
             await stopScreenMirror();
-          } else if (cmd == 'startAudio') {
+          } else if (cmdLower == 'startaudio') {
             await audioStreamService.startAudioStream(pairingCode: _pairingCode);
-          } else if (cmd == 'stopAudio') {
+          } else if (cmdLower == 'stopaudio') {
             await audioStreamService.stopAudioStream(_pairingCode);
-          } else if (cmd == 'syncLocation') {
+          } else if (cmdLower == 'synclocation') {
             await locationService.syncCurrentLocation(_pairingCode);
           }
         } catch (e) {
