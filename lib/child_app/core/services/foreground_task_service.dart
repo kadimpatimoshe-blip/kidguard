@@ -69,8 +69,8 @@ class ForegroundTaskService {
       callback: startCallback,
     );
 
-    _isRunning = result.success;
-    return result.success;
+    _isRunning = result is ServiceRequestSuccess;
+    return _isRunning;
   }
 
   /// Updates foreground notification description (e.g. when streaming screen or camera)
@@ -86,8 +86,11 @@ class ForegroundTaskService {
   /// Stops foreground task
   Future<bool> stopProtectionService() async {
     final result = await FlutterForegroundTask.stopService();
-    _isRunning = !result.success;
-    return result.success;
+    if (result is ServiceRequestSuccess) {
+      _isRunning = false;
+      return true;
+    }
+    return false;
   }
 }
 
