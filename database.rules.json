@@ -23,13 +23,13 @@
     "devices": {
       "$code": {
         ".read": "auth != null",
-        ".write": "auth != null"
+        ".write": "auth != null && (!data.exists() || data.child('parentUid').val() == auth.uid || newData.child('parentUid').val() == auth.uid)"
       }
     },
     "pairings": {
       "$code": {
         ".read": "auth != null",
-        ".write": "auth != null"
+        ".write": "auth != null && (!data.exists() || data.child('parentUid').val() == auth.uid || newData.child('parentUid').val() == auth.uid)"
       }
     },
     "pairing_codes": {

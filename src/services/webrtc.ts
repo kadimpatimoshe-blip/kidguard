@@ -416,8 +416,8 @@ export const startParentWebRTCSession = async (
             const candRef = push(ref(database, `devices/${deviceId}/signaling/parentCandidates`));
             await set(candRef, candJson);
 
-            // Also post to devices/${deviceId}/stream/ice for KidGuardSignaling compatibility
-            const streamIceRef = push(ref(database, `devices/${deviceId}/stream/ice`));
+            // Also post to devices/${deviceId}/stream/parentCandidates for Kotlin child app compatibility
+            const streamIceRef = push(ref(database, `devices/${deviceId}/stream/parentCandidates`));
             await set(streamIceRef, {
               candidate: event.candidate.candidate,
               sdpMid: event.candidate.sdpMid,
@@ -451,21 +451,25 @@ export const startParentWebRTCSession = async (
           createdAt: Date.now(),
         };
         
-        // Reset old signaling artifacts and post new offer
-        await update(signalingRef, {
-          offer: offerPayload,
-          answer: null,
-          childCandidates: null,
-          state: 'offer_created',
-        });
+        // Reset old signaling artifacts and post new offer using deep paths
+        const signalingUpdates: Record<string, any> = {};
+        signalingUpdates[`devices/${deviceId}/signaling/offer`] = offerPayload;
+        signalingUpdates[`devices/${deviceId}/signaling/answer`] = null;
+        signalingUpdates[`devices/${deviceId}/signaling/childCandidates`] = null;
+        signalingUpdates[`devices/${deviceId}/signaling/parentCandidates`] = null;
+        signalingUpdates[`devices/${deviceId}/signaling/state`] = 'offer_created';
+        signalingUpdates[`devices/${deviceId}/signaling/updatedAt`] = Date.now();
+        
+        await update(ref(database), signalingUpdates);
 
         // Also update devices/${deviceId}/stream node for KidGuardSignaling compatibility
-        const streamRef = ref(database, `devices/${deviceId}/stream`);
-        await update(streamRef, {
-          offer: offerPayload,
-          answer: null,
-          status: 'offer_created',
-        });
+        const streamUpdates: Record<string, any> = {};
+        streamUpdates[`devices/${deviceId}/stream/offer`] = offerPayload;
+        streamUpdates[`devices/${deviceId}/stream/answer`] = null;
+        streamUpdates[`devices/${deviceId}/stream/status`] = 'offer_created';
+        streamUpdates[`devices/${deviceId}/stream/updatedAt`] = Date.now();
+        
+        await update(ref(database), streamUpdates);
 
         // Listen for child SDP Answer on signaling/answer
         const answerRef = ref(database, `devices/${deviceId}/signaling/answer`);
@@ -526,15 +530,15 @@ export const startParentWebRTCSession = async (
           }
         });
 
-        // Also listen for child ICE Candidates on stream/ice
-        const streamIceRef = ref(database, `devices/${deviceId}/stream/ice`);
-        const unsubStreamIce = onValue(streamIceRef, async (snapshot) => {
+        // Also listen for child ICE Candidates on stream/childCandidates (Standardized Path)
+        const streamChildCandRef = ref(database, `devices/${deviceId}/stream/childCandidates`);
+        const unsubStreamChildCand = onValue(streamChildCandRef, async (snapshot) => {
           if (!snapshot.exists() || !pc || isCleanedUp) return;
           const candidatesObj = snapshot.val();
           if (candidatesObj && typeof candidatesObj === 'object') {
             const candidatesList = Object.values(candidatesObj) as any[];
             for (const cand of candidatesList) {
-              if (cand && cand.candidate && cand.from !== 'parent') {
+              if (cand && cand.candidate) {
                 try {
                   await pc.addIceCandidate(new RTCIceCandidate({
                     candidate: cand.candidate,
@@ -549,7 +553,7 @@ export const startParentWebRTCSession = async (
 
         candidatesUnsub = () => {
           off(childCandRef, 'value', unsubCand);
-          off(streamIceRef, 'value', unsubStreamIce);
+          off(streamChildCandRef, 'value', unsubStreamChildCand);
         };
       }
 
@@ -584,9 +588,10 @@ export const startParentWebRTCSession = async (
       });
       if (database) {
         try {
-          await update(ref(database, `devices/${deviceId}/signaling`), {
-            'offer/facing': facing,
-          });
+          const switchUpdates: Record<string, any> = {};
+          switchUpdates[`devices/${deviceId}/signaling/offer/facing`] = facing;
+          switchUpdates[`devices/${deviceId}/stream/offer/facing`] = facing;
+          await update(ref(database), switchUpdates);
         } catch {
           // ignore
         }
@@ -595,7 +600,7 @@ export const startParentWebRTCSession = async (
     checkCodeValidity: async () => {
       return checkChildPairingCodeValidity(activePairingCode, deviceId, childId);
     },
-    cleanup: () => {
+    cleanup: async () => {
       isCleanedUp = true;
       cleanupListeners();
       if (validityUnsub) {
@@ -610,10 +615,10 @@ export const startParentWebRTCSession = async (
       }
       if (database) {
         try {
-          update(ref(database, `devices/${deviceId}/signaling`), {
-            state: 'closed',
-            closedAt: Date.now(),
-          }).catch(() => {});
+          const cleanupUpdates: Record<string, any> = {};
+          cleanupUpdates[`devices/${deviceId}/signaling/state`] = 'closed';
+          cleanupUpdates[`devices/${deviceId}/signaling/closedAt`] = Date.now();
+          await update(ref(database), cleanupUpdates);
         } catch {}
       }
       sendRemoteCommand(deviceId, parentUid, childId, 'stopStream').catch(() => {});
@@ -795,19 +800,21 @@ export const startParentScreenShareSession = async (
       await pc.setLocalDescription(offer);
 
       if (database) {
-        const signalingRef = ref(database, `devices/${deviceId}/screenSignaling`);
-        await update(signalingRef, {
-          offer: {
-            type: offer.type,
-            sdp: offer.sdp,
-            mediaType: 'screen',
-            timestamp: Date.now(),
-            initiator: parentUid,
-          },
-          answer: null,
-          childCandidates: null,
-          state: 'offer_created',
-        });
+        const screenSignalingUpdates: Record<string, any> = {};
+        screenSignalingUpdates[`devices/${deviceId}/screenSignaling/offer`] = {
+          type: offer.type,
+          sdp: offer.sdp,
+          mediaType: 'screen',
+          timestamp: Date.now(),
+          initiator: parentUid,
+        };
+        screenSignalingUpdates[`devices/${deviceId}/screenSignaling/answer`] = null;
+        screenSignalingUpdates[`devices/${deviceId}/screenSignaling/childCandidates`] = null;
+        screenSignalingUpdates[`devices/${deviceId}/screenSignaling/parentCandidates`] = null;
+        screenSignalingUpdates[`devices/${deviceId}/screenSignaling/state`] = 'offer_created';
+        screenSignalingUpdates[`devices/${deviceId}/screenSignaling/updatedAt`] = Date.now();
+        
+        await update(ref(database), screenSignalingUpdates);
 
         // Listen for child screen answer
         const answerRef = ref(database, `devices/${deviceId}/screenSignaling/answer`);
@@ -870,7 +877,7 @@ export const startParentScreenShareSession = async (
       await initConnection();
     },
     switchCamera: async () => {},
-    cleanup: () => {
+    cleanup: async () => {
       isCleanedUp = true;
       cleanupListeners();
       if (pc) {
@@ -881,10 +888,10 @@ export const startParentScreenShareSession = async (
       }
       if (database) {
         try {
-          update(ref(database, `devices/${deviceId}/screenSignaling`), {
-            state: 'closed',
-            closedAt: Date.now(),
-          }).catch(() => {});
+          const cleanupUpdates: Record<string, any> = {};
+          cleanupUpdates[`devices/${deviceId}/screenSignaling/state`] = 'closed';
+          cleanupUpdates[`devices/${deviceId}/screenSignaling/closedAt`] = Date.now();
+          await update(ref(database), cleanupUpdates);
         } catch {}
       }
       sendRemoteCommand(deviceId, parentUid, childId, 'stopScreenShare').catch(() => {});

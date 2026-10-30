@@ -190,10 +190,11 @@ export const DeviceCard: React.FC<DeviceCardProps> = ({
 
         <button
           onClick={() => onUnlink(device)}
-          className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition-colors border border-transparent hover:border-rose-200"
-          title={`Remove & Unlink ${modelName}`}
+          className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition-colors shadow-xs flex items-center gap-1.5"
+          title={`Permanently delete ${modelName} from database`}
         >
-          <Trash2 className="w-4 h-4" />
+          <Trash2 className="w-3.5 h-3.5" />
+          <span>Delete Device</span>
         </button>
       </div>
     </article>

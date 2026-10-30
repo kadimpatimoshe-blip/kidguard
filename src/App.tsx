@@ -28,9 +28,10 @@ import {
   Bell,
   PhoneCall,
   BarChart3,
-  Plus
+  Plus,
+  Loader2
 } from 'lucide-react';
-import { auth, database, sanitizeForRTDB, subscribeToChildDevices, getCurrentParent, saveParentSession, clearParentSession, pairChildDevice, unlinkChildDevice, signInWithEmail, signOut as fbSignOut, onAuthStateChanged, getOrCreateChildPairingCode } from './services/firebase';
+import { auth, database, sanitizeForRTDB, subscribeToChildDevices, getCurrentParent, saveParentSession, clearParentSession, pairChildDevice, unlinkChildDevice, deleteChildDevice, signInWithEmail, signUpWithEmail, signOut as fbSignOut, onAuthStateChanged, getOrCreateChildPairingCode } from './services/firebase';
 import { ref, update, onValue, off, set, onDisconnect } from 'firebase/database';
 import { ParentChildDevice, ConsoleNavSection } from './types';
 import { Header } from './components/Header';
@@ -51,17 +52,9 @@ export const App: React.FC = () => {
   // ----------------------------------------------------
   // Authentication & Onboarding State
   // ----------------------------------------------------
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return !!localStorage.getItem('kidguard_auth_user');
-  });
-  const [currentUser, setCurrentUser] = useState<{ uid: string; email: string } | null>(() => {
-    try {
-      const raw = localStorage.getItem('kidguard_auth_user');
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const [currentUser, setCurrentUser] = useState<{ uid: string; email: string } | null>(null);
 
   // Role Selection State
   const [selectedRole, setSelectedRole] = useState<AppRole>(() => {
@@ -170,7 +163,10 @@ export const App: React.FC = () => {
   // ----------------------------------------------------
   useEffect(() => {
     // Listen for real-time Firebase Auth state changes for permanent persistence
-    if (!auth) return;
+    if (!auth) {
+      setIsAuthLoading(false);
+      return;
+    }
     
     const unsubscribe = onAuthStateChanged(auth, (user: any) => {
       if (user) {
@@ -178,7 +174,11 @@ export const App: React.FC = () => {
         saveParentSession(sessionUser);
         setCurrentUser(sessionUser);
         setIsAuthenticated(true);
+      } else {
+        setCurrentUser(null);
+        setIsAuthenticated(false);
       }
+      setIsAuthLoading(false);
     });
 
     return () => unsubscribe();
@@ -483,20 +483,50 @@ export const App: React.FC = () => {
   };
 
   const handleQuickDemoAuth = async () => {
-    // Attempt to log in with a known demo account to ensure real Firebase Auth
-    // If this fails, we fall back to a mock but warn the user.
+    const demoEmail = 'parent@kidguard.family';
+    const demoPass = 'secret123';
+    
     try {
-      const user = await signInWithEmail('kadimpatimoshe@gmail.com', 'secret123');
-      if (user) {
-        showToast('Demo Account Logged In');
+      showToast('Connecting to secure demo session...');
+      // 1. Attempt standard sign-in
+      try {
+        const user = await signInWithEmail(demoEmail, demoPass);
+        if (user) {
+          showToast('Demo Account Logged In');
+          return;
+        }
+      } catch (err: any) {
+        // Handle common auth errors by attempting registration
+        const errorCode = err.code || '';
+        if (
+          errorCode === 'auth/user-not-found' || 
+          errorCode === 'auth/invalid-credential' || 
+          errorCode === 'auth/wrong-password' ||
+          errorCode.includes('invalid')
+        ) {
+          console.log('Demo account needs provisioning, attempting sign-up...');
+          try {
+            const user = await signUpWithEmail(demoEmail, demoPass);
+            if (user) {
+              showToast('Demo Account Provisioned & Logged In');
+              return;
+            }
+          } catch (signUpErr: any) {
+            console.warn('Auto-provisioning failed:', signUpErr);
+            // If email already exists, it means the password might be different, 
+            // but we'll fall through to mock to ensure the UI at least loads.
+          }
+        }
+        throw err;
       }
     } catch (err) {
-      console.warn('Demo login failed, using local mock mode:', err);
-      const demo = { uid: 'parent_demo_01', email: 'kadimpatimoshe@gmail.com' };
+      console.warn('Real Firebase Auth failed, using resilient local session:', err);
+      // Final fallback to mock session so the user can see the dashboard
+      const demo = { uid: 'parent_demo_01', email: demoEmail };
       saveParentSession(demo);
       setCurrentUser(demo);
       setIsAuthenticated(true);
-      showToast('Demo Account (Offline Mode) Active');
+      showToast('Demo Dashboard (Local Mode) Active');
     }
   };
 
@@ -622,6 +652,28 @@ export const App: React.FC = () => {
       }
     }
   };
+
+  // ====================================================
+  // SCREEN 0: INITIAL AUTH LOADING SPLASH
+  // ====================================================
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-[#F4F6F4] flex flex-col items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-16 h-16 rounded-2xl bg-[#0A9B70] text-white flex items-center justify-center shadow-lg animate-pulse">
+            <Shield className="w-8 h-8" />
+          </div>
+          <div className="flex flex-col items-center gap-1">
+            <h2 className="text-lg font-bold text-[#1D302B]">Secure Family Supervision</h2>
+            <div className="flex items-center gap-2 text-xs text-[#71807B] font-medium">
+              <Loader2 className="w-3 h-3 animate-spin text-[#0A9B70]" />
+              Initializing secure session…
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ====================================================
   // SCREEN 1: INITIAL APP LAUNCH & PASSCODE/EMAIL LOGIN

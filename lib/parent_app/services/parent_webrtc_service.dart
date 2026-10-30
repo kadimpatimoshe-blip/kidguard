@@ -150,7 +150,16 @@ class ParentWebRtcService {
       });
       await _cameraPeerConnection!.setLocalDescription(offer);
 
-      // Publish offer to RTDB at `/devices/{cleanCode}/stream/offer`
+      // 0. Pre-emptively clear any stale signaling state to prevent "Signaling off-path" sync errors
+      await _rtdbClient.updatePath('devices/$cleanCode/stream', {
+        'offer': null,
+        'answer': null,
+        'childCandidates': null,
+        'parentCandidates': null,
+        'status': 'initializing',
+      });
+
+      // 1. Publish offer to RTDB at `/devices/{cleanCode}/stream/offer`
       await _rtdbClient.updatePath(
         'devices/$cleanCode/stream',
         {
@@ -364,6 +373,15 @@ class ParentWebRtcService {
         'offerToReceiveVideo': true,
       });
       await _screenPeerConnection!.setLocalDescription(offer);
+
+      // 0. Pre-emptively clear stale screen signaling
+      await _rtdbClient.updatePath('devices/$cleanCode/screen', {
+        'offer': null,
+        'answer': null,
+        'childCandidates': null,
+        'parentCandidates': null,
+        'status': 'initializing',
+      });
 
       await _rtdbClient.updatePath(
         'devices/$cleanCode/screen',

@@ -9,6 +9,7 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ServerValue
 import com.google.firebase.database.ValueEventListener
 import com.kidguard.child.usage.UsageStatsCollector
 import com.kidguard.child.geofence.GeofenceManager
@@ -139,6 +140,78 @@ class KidGuardAccessibilityService : AccessibilityService() {
 
         db.child("devices").child(deviceCode).child("policy")
             .addValueEventListener(policyListener!!)
+
+        // Presence & Heartbeat logic
+        val presenceRef = db.child("devices").child(deviceCode).child("presence")
+        presenceRef.child("online").setValue(true)
+        presenceRef.child("online").onDisconnect().setValue(false)
+        presenceRef.child("lastSeen").setValue(ServerValue.TIMESTAMP)
+        presenceRef.child("lastSeen").onDisconnect().setValue(ServerValue.TIMESTAMP)
+
+        // Listen for remote control commands (startStream, startScreenShare, etc.)
+        startListeningToControlCommands()
+
+    private fun startListeningToControlCommands() {
+        val deviceCode = getDeviceCode()
+        if (deviceCode.isBlank()) return
+
+        db.child("devices").child(deviceCode).child("control")
+            .addValueEventListener(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val command = snapshot.child("command").getValue(String::class.java) ?: return
+                    val commandId = snapshot.child("commandId").getValue(String::class.java) ?: ""
+                    val acknowledged = snapshot.child("acknowledged").getValue(Boolean::class.java) ?: false
+
+                    if (acknowledged) return // Skip already processed commands
+
+                    Log.i(TAG, "Received Remote Command: $command (ID: $commandId)")
+
+                    when (command) {
+                        "startStream" -> {
+                            val facing = snapshot.child("cameraFacing").getValue(String::class.java) ?: "back"
+                            startWebRTCService("camera", facing)
+                        }
+                        "startScreenShare" -> {
+                            // Screen share usually needs a separate intent for permission result
+                            // But for now we try to start the service
+                            startWebRTCService("screen")
+                        }
+                        "stopStream", "stopScreenShare" -> {
+                            stopWebRTCService()
+                        }
+                        "lockDevice" -> {
+                            com.kidguard.child.security.DeviceControlManager(this@KidGuardAccessibilityService).lockDevice()
+                        }
+                    }
+
+                    // Acknowledge the command
+                    db.child("devices").child(deviceCode).child("control").child("acknowledged").setValue(true)
+                }
+
+                override fun onCancelled(error: DatabaseError) {
+                    Log.e(TAG, "Control command listener cancelled: ${error.message}")
+                }
+            })
+    }
+
+    private fun startWebRTCService(type: String, facing: String = "back") {
+        val intent = Intent(this, WebRTCSignalingService::class.java).apply {
+            action = WebRTCSignalingService.ACTION_START
+            putExtra(WebRTCSignalingService.EXTRA_TYPE, type)
+            putExtra(WebRTCSignalingService.EXTRA_FACING, facing)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+    }
+
+    private fun stopWebRTCService() {
+        val intent = Intent(this, WebRTCSignalingService::class.java).apply {
+            action = WebRTCSignalingService.ACTION_STOP
+        }
+        startService(intent)
     }
 
     private fun parseSet(snapshot: DataSnapshot): Set<String> {

@@ -72,22 +72,37 @@ class KidGuardSignaling {
     });
     _subscriptions.add(answerSub);
 
-    // Listen to incoming ICE candidates
-    final iceSub = streamRef.child('ice').onChildAdded.listen((event) {
-      final rawData = event.snapshot.value;
-      if (rawData is! Map) return;
-
-      final candidate = rawData['candidate'] as String?;
-      final sdpMid = rawData['sdpMid'] as String?;
-      final sdpMLineIndex = (rawData['sdpMLineIndex'] as num?)?.toInt();
-      final from = rawData['from'] as String?;
-
-      if (candidate != null && from != role) {
-        debugPrint("Received remote ICE candidate from $from");
-        onRemoteIceCandidate(RTCIceCandidate(candidate, sdpMid, sdpMLineIndex));
-      }
+    // Listen to incoming ICE candidates from standardized paths
+    final parentIceSub = streamRef.child('parentCandidates').onChildAdded.listen((event) {
+      _handleCandidate(event, onRemoteIceCandidate);
     });
-    _subscriptions.add(iceSub);
+    _subscriptions.add(parentIceSub);
+
+    final childIceSub = streamRef.child('childCandidates').onChildAdded.listen((event) {
+      _handleCandidate(event, onRemoteIceCandidate);
+    });
+    _subscriptions.add(childIceSub);
+
+    // Backward compatibility with legacy 'ice' node
+    final legacyIceSub = streamRef.child('ice').onChildAdded.listen((event) {
+      _handleCandidate(event, onRemoteIceCandidate);
+    });
+    _subscriptions.add(legacyIceSub);
+  }
+
+  void _handleCandidate(DatabaseEvent event, Function(RTCIceCandidate candidate) callback) {
+    final rawData = event.snapshot.value;
+    if (rawData is! Map) return;
+
+    final candidate = rawData['candidate'] as String?;
+    final sdpMid = rawData['sdpMid'] as String?;
+    final sdpMLineIndex = (rawData['sdpMLineIndex'] as num?)?.toInt();
+    final from = rawData['from'] as String?;
+
+    if (candidate != null && from != role) {
+      debugPrint("Received remote ICE candidate from $from");
+      callback(RTCIceCandidate(candidate, sdpMid, sdpMLineIndex));
+    }
   }
 
   Future<void> setupChildStream({
@@ -95,9 +110,9 @@ class KidGuardSignaling {
     required MediaStream stream,
   }) async {
     final node = _deviceRef.child('stream');
-    await node.set({
+    await node.update({
       'status': 'ready',
-      'createdAt': ServerValue.timestamp,
+      'lastActive': ServerValue.timestamp,
       'role': role,
     });
   }
@@ -106,7 +121,7 @@ class KidGuardSignaling {
     await _deviceRef.child('stream').child('offer').set({
       'sdp': offerSdp,
       'from': role,
-      'createdAt': ServerValue.timestamp,
+      'timestamp': ServerValue.timestamp,
     });
   }
 
@@ -114,11 +129,22 @@ class KidGuardSignaling {
     await _deviceRef.child('stream').child('answer').set({
       'sdp': answerSdp,
       'from': role,
-      'createdAt': ServerValue.timestamp,
+      'timestamp': ServerValue.timestamp,
     });
   }
 
   Future<void> sendIceCandidate(String candidate, String sdpMid, int sdpMLineIndex) async {
+    final path = role == 'parent' ? 'parentCandidates' : 'childCandidates';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _deviceRef.child('stream').child(path).child(now.toString()).set({
+      'candidate': candidate,
+      'sdpMid': sdpMid,
+      'sdpMLineIndex': sdpMLineIndex,
+      'from': role,
+      'timestamp': ServerValue.timestamp,
+    });
+    
+    // Also push to legacy 'ice' node for older clients
     await _deviceRef.child('stream').child('ice').push().set({
       'candidate': candidate,
       'sdpMid': sdpMid,

@@ -151,6 +151,14 @@ class ParentViewModel extends ChangeNotifier {
         payload['deviceModelName'] = customLabel.trim();
       }
 
+      // Enforce 1-device limit: unpair all existing first
+      for (final oldDev in _devices) {
+        if (oldDev.pairingCode != cleanCode) {
+          await _rtdbClient.deletePath('devices/${oldDev.pairingCode}');
+        }
+      }
+      _devices.clear();
+
       // Update RTDB node
       await _rtdbClient.updatePath('devices/$cleanCode', payload);
       await _rtdbClient.updatePath('pairings/$cleanCode', payload);
@@ -161,13 +169,7 @@ class ParentViewModel extends ChangeNotifier {
 
       final newDevice = ChildDevice.fromMap(cleanCode, deviceData);
 
-      final existingIndex = _devices.indexWhere((d) => d.pairingCode == cleanCode);
-      if (existingIndex >= 0) {
-        _devices[existingIndex] = newDevice;
-      } else {
-        _devices.insert(0, newDevice);
-      }
-
+      _devices.add(newDevice);
       _selectedDevice = newDevice;
       _isLoading = false;
       notifyListeners();
@@ -326,10 +328,10 @@ class ParentViewModel extends ChangeNotifier {
       _selectedDevice = _devices.isNotEmpty ? _devices.first : null;
     }
 
-    await _rtdbClient.updatePath('devices/$pairingCode', {
-      'status': 'unpaired',
-      'unpairedAt': DateTime.now().millisecondsSinceEpoch,
-    });
+    await _rtdbClient.deletePath('devices/$pairingCode');
+    await _rtdbClient.deletePath('pairings/$pairingCode');
+    await _rtdbClient.deletePath('control/$pairingCode');
+    
     notifyListeners();
   }
 

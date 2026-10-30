@@ -9,7 +9,9 @@ import {
   signInWithPopup,
   GoogleAuthProvider,
   User,
-  Auth
+  Auth,
+  setPersistence,
+  browserLocalPersistence
 } from 'firebase/auth';
 import { 
   getDatabase, 
@@ -59,6 +61,8 @@ try {
     app = getApps()[0];
   }
   auth = getAuth(app);
+  setPersistence(auth, browserLocalPersistence).catch(err => console.warn('Persistence error:', err));
+  
   database = getDatabase(app);
   db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId);
   firebaseInitialized = true;
@@ -162,15 +166,21 @@ export const isDeviceRecentlyOnline = (device: ParentChildDevice): boolean => {
 
 // Authentication helper
 export const getCurrentParent = (): { uid: string; email: string } | null => {
-  if (auth?.currentUser) {
+  const user = auth?.currentUser;
+  if (user) {
     return {
-      uid: auth.currentUser.uid,
-      email: auth.currentUser.email || 'parent@kidguard.family',
+      uid: user.uid,
+      email: user.email || 'parent@kidguard.family',
     };
   }
   try {
     const stored = localStorage.getItem(LOCAL_STORAGE_PARENT_KEY);
-    if (stored) return JSON.parse(stored);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      // Verify if stored UID matches current auth (if auth is already loaded but user is null, stored is invalid)
+      if (auth && !auth.currentUser) return null;
+      return parsed;
+    }
   } catch {
     // ignore
   }
@@ -209,6 +219,19 @@ export const signInWithEmail = async (email: string, pass: string): Promise<User
     return user;
   } catch (err) {
     console.error('Email Sign-In failed', err);
+    throw err;
+  }
+};
+
+export const signUpWithEmail = async (email: string, pass: string): Promise<User | null> => {
+  if (!auth) return null;
+  try {
+    const result = await createUserWithEmailAndPassword(auth, email, pass);
+    const user = result.user;
+    saveParentSession({ uid: user.uid, email: user.email || '' });
+    return user;
+  } catch (err) {
+    console.error('Email Sign-Up failed', err);
     throw err;
   }
 };
@@ -258,7 +281,21 @@ export const subscribeToChildDevices = (
       }
 
       const devicesList: ParentChildDevice[] = [];
-      Object.keys(val).forEach((key) => {
+      const keys = Object.keys(val);
+      
+      // STRICT 1-DEVICE LIMIT: If there are multiple devices, we only take the most recent one
+      // This cleans up legacy data and prevents UI clutter.
+      let targetKeys = keys;
+      if (keys.length > 1) {
+        // Sort by timestamp if available
+        targetKeys = keys.sort((a, b) => {
+          const tA = val[a]?.timestamp || '';
+          const tB = val[b]?.timestamp || '';
+          return tB.localeCompare(tA);
+        }).slice(0, 1);
+      }
+
+      targetKeys.forEach((key) => {
         const item = val[key];
         if (item && typeof item === 'object') {
           // Strictly exclude any legacy dummy/mock devices
@@ -486,6 +523,14 @@ export const updateChildLocation = async (
       const cleanPayload = sanitizeForRTDB(payload);
       updates[`devices/${cleanCode}/location`] = cleanPayload;
       updates[`pairings/${cleanCode}/location`] = cleanPayload;
+      
+      // Also update under parent node if we know which parent this child belongs to
+      const parent = getCurrentParent();
+      if (parent) {
+        const childId = `child_${cleanCode}`;
+        updates[`parents/${parent.uid}/children/${childId}/location`] = cleanPayload;
+      }
+      
       await update(ref(database), updates);
     } catch (e) {
       console.warn('Failed to push RTDB location update:', e);
@@ -1416,9 +1461,25 @@ export const claimPairingCode = async (
     };
 
     const updates: Record<string, any> = {};
-    updates[`parents/${parentUid}/children/${childId}`] = sanitizeForRTDB(connectedDevice);
-    updates[`devices/${cleanCode}`] = { ...connectedDevice, parentUid, status: 'synced' }; 
-    updates[`pairings/${cleanCode}`] = { ...connectedDevice, parentUid, status: 'synced' };
+    const sanitizedDevice = sanitizeForRTDB(connectedDevice);
+    updates[`parents/${parentUid}/children/${childId}`] = sanitizedDevice;
+    
+    // Use deep paths to avoid wiping child telemetry
+    updates[`devices/${cleanCode}/deviceId`] = deviceId;
+    updates[`devices/${cleanCode}/childId`] = childId;
+    updates[`devices/${cleanCode}/pairingCode`] = cleanCode;
+    updates[`devices/${cleanCode}/parentUid`] = parentUid;
+    updates[`devices/${cleanCode}/status`] = 'synced';
+    updates[`devices/${cleanCode}/online`] = true;
+    updates[`devices/${cleanCode}/lastSeen`] = nowIso;
+    updates[`devices/${cleanCode}/deviceModelName`] = customModelName || bindData.deviceModelName;
+
+    updates[`pairings/${cleanCode}/deviceId`] = deviceId;
+    updates[`pairings/${cleanCode}/childId`] = childId;
+    updates[`pairings/${cleanCode}/pairingCode`] = cleanCode;
+    updates[`pairings/${cleanCode}/parentUid`] = parentUid;
+    updates[`pairings/${cleanCode}/status`] = 'synced';
+    updates[`pairings/${cleanCode}/online`] = true;
     
     await update(ref(database), updates);
     await remove(bindRef);
@@ -1549,33 +1610,29 @@ export const claimPairingCode = async (
       const rawUpdates: Record<string, any> = {};
 
       // 1. Save connected child device under parents/{parentUid}/children/{childId}
-      rawUpdates[`parents/${parentUid}/children/${childId}`] = connectedDevice;
+      rawUpdates[`parents/${parentUid}/children/${childId}`] = sanitizeForRTDB(connectedDevice);
 
-      // 2. Update status to Online/Synced under /devices/{cleanCode}
-      rawUpdates[`devices/${cleanCode}`] = {
-        deviceId,
-        childId,
-        pairingCode: cleanCode,
-        parentUid,
-        status: 'synced',
-        online: true,
-        lastSeen: nowIso,
-        updatedAt: nowIso,
-        deviceModelName,
-      };
+      // 2. Update status to Online/Synced under /devices/{cleanCode} using deep paths
+      rawUpdates[`devices/${cleanCode}/deviceId`] = deviceId;
+      rawUpdates[`devices/${cleanCode}/childId`] = childId;
+      rawUpdates[`devices/${cleanCode}/pairingCode`] = cleanCode;
+      rawUpdates[`devices/${cleanCode}/parentUid`] = parentUid;
+      rawUpdates[`devices/${cleanCode}/status`] = 'synced';
+      rawUpdates[`devices/${cleanCode}/online`] = true;
+      rawUpdates[`devices/${cleanCode}/lastSeen`] = nowIso;
+      rawUpdates[`devices/${cleanCode}/updatedAt`] = nowIso;
+      rawUpdates[`devices/${cleanCode}/deviceModelName`] = deviceModelName;
 
       // 3. Update status to Online/Synced under /pairings/{cleanCode}
-      rawUpdates[`pairings/${cleanCode}`] = {
-        deviceId,
-        childId,
-        pairingCode: cleanCode,
-        parentUid,
-        status: 'synced',
-        online: true,
-        lastSeen: nowIso,
-        updatedAt: nowIso,
-        deviceModelName,
-      };
+      rawUpdates[`pairings/${cleanCode}/deviceId`] = deviceId;
+      rawUpdates[`pairings/${cleanCode}/childId`] = childId;
+      rawUpdates[`pairings/${cleanCode}/pairingCode`] = cleanCode;
+      rawUpdates[`pairings/${cleanCode}/parentUid`] = parentUid;
+      rawUpdates[`pairings/${cleanCode}/status`] = 'synced';
+      rawUpdates[`pairings/${cleanCode}/online`] = true;
+      rawUpdates[`pairings/${cleanCode}/lastSeen`] = nowIso;
+      rawUpdates[`pairings/${cleanCode}/updatedAt`] = nowIso;
+      rawUpdates[`pairings/${cleanCode}/deviceModelName`] = deviceModelName;
 
       // 4. Update source path if different
       if (sourcePath && sourcePath !== `devices/${cleanCode}` && sourcePath !== `pairings/${cleanCode}`) {
@@ -1639,7 +1696,32 @@ export const pairChildDevice = async (
   const deviceId = baseData.deviceId || `dev_${cleanCode}`;
   const modelName = customModelName || baseData.deviceModelName || `Device ${cleanCode}`;
 
-  // 2. Prepare the paired device record
+  // 2. ENFORCE 1-DEVICE LIMIT: Prepare a multi-path update to wipe existing links
+  // This ensures that when a new device is paired, ALL traces of old devices for this parent are removed.
+  const parentChildrenRef = ref(database, `parents/${parentUid}/children`);
+  const existingChildrenSnap = await get(parentChildrenRef);
+  const existingChildren = existingChildrenSnap.val();
+  
+  const updates: Record<string, any> = {};
+  
+  // Wipe all existing children for this parent from RTDB
+  if (existingChildren) {
+    Object.keys(existingChildren).forEach(oldChildId => {
+      const oldChild = existingChildren[oldChildId];
+      updates[`parents/${parentUid}/children/${oldChildId}`] = null;
+      if (oldChild?.pairingCode) {
+        // Remove from all known global nodes
+        const pCode = oldChild.pairingCode;
+        updates[`devices/${pCode}`] = null;
+        updates[`pairings/${pCode}`] = null;
+        updates[`control/${pCode}`] = null;
+        updates[`stream/${pCode}`] = null;
+        updates[`signaling/${pCode}`] = null;
+      }
+    });
+  }
+
+  // 3. Prepare the new paired device record
   const nowIso = new Date().toISOString();
   const connectedDevice: ParentChildDevice = {
     childId,
@@ -1672,29 +1754,34 @@ export const pairChildDevice = async (
     }
   };
 
-  // 3. ENFORCE 1-DEVICE LIMIT: Delete any existing children for this parent
-  const parentChildrenRef = ref(database, `parents/${parentUid}/children`);
-  const existingChildrenSnap = await get(parentChildrenRef);
-  const existingChildren = existingChildrenSnap.val();
-  
-  const updates: Record<string, any> = {};
-  if (existingChildren) {
-    Object.keys(existingChildren).forEach(oldChildId => {
-      const oldChild = existingChildren[oldChildId];
-      updates[`parents/${parentUid}/children/${oldChildId}`] = null;
-      if (oldChild?.pairingCode) {
-        updates[`devices/${oldChild.pairingCode}`] = null;
-        updates[`pairings/${oldChild.pairingCode}`] = null;
-      }
-    });
-  }
-
-  // 4. Save the new link
+  // 4. Save the new link and clear pending bind
   updates[`parents/${parentUid}/children/${childId}`] = sanitizeForRTDB(connectedDevice);
-  updates[`devices/${cleanCode}`] = { ...connectedDevice, parentUid, status: 'synced' };
-  updates[`pairings/${cleanCode}`] = { ...connectedDevice, parentUid, status: 'synced' };
   
-  // 5. Atomic Update and Cleanup
+  // Use deep paths to preserve existing child telemetry (location, battery, etc.)
+  updates[`devices/${cleanCode}/deviceId`] = deviceId;
+  updates[`devices/${cleanCode}/childId`] = childId;
+  updates[`devices/${cleanCode}/pairingCode`] = cleanCode;
+  updates[`devices/${cleanCode}/parentUid`] = parentUid;
+  updates[`devices/${cleanCode}/status`] = 'synced';
+  updates[`devices/${cleanCode}/online`] = true;
+  updates[`devices/${cleanCode}/lastSeen`] = nowIso;
+  updates[`devices/${cleanCode}/deviceModelName`] = modelName;
+
+  updates[`pairings/${cleanCode}/deviceId`] = deviceId;
+  updates[`pairings/${cleanCode}/childId`] = childId;
+  updates[`pairings/${cleanCode}/pairingCode`] = cleanCode;
+  updates[`pairings/${cleanCode}/parentUid`] = parentUid;
+  updates[`pairings/${cleanCode}/status`] = 'synced';
+  updates[`pairings/${cleanCode}/online`] = true;
+  
+  // Also clear signaling artifacts from previous sessions
+  updates[`devices/${cleanCode}/signaling`] = null;
+  updates[`devices/${cleanCode}/stream/offer`] = null;
+  updates[`devices/${cleanCode}/stream/answer`] = null;
+  updates[`devices/${cleanCode}/stream/childCandidates`] = null;
+  updates[`devices/${cleanCode}/stream/parentCandidates`] = null;
+
+  // 5. Atomic Update
   await update(ref(database), updates);
   if (bindSnap.exists()) {
     await remove(bindRef);
@@ -1714,27 +1801,65 @@ export const unlinkChildDevice = async (parentUid: string, childId: string): Pro
     const snap = await get(parentChildRef);
     const data = snap.val();
 
+    const updates: Record<string, any> = {};
+    updates[`parents/${parentUid}/children/${childId}`] = null;
+
     if (data && data.pairingCode) {
       const pCode = data.pairingCode;
-      // Fully wipe the device traces in parallel
-      await Promise.all([
-        remove(ref(database, `devices/${pCode}`)),
-        remove(ref(database, `pairings/${pCode}`)),
-        remove(ref(database, `control/${pCode}`)),
-        remove(ref(database, `pending_binds/${pCode}`)),
-        remove(parentChildRef)
-      ]);
-    } else {
-      await remove(parentChildRef);
+      updates[`devices/${pCode}`] = null;
+      updates[`pairings/${pCode}`] = null;
+      updates[`control/${pCode}`] = null;
+      updates[`pending_binds/${pCode}`] = null;
+      updates[`stream/${pCode}`] = null;
+      updates[`signaling/${pCode}`] = null;
+      
+      // Also clear signaling candidates
+      updates[`devices/${pCode}/signaling`] = null;
+      updates[`devices/${pCode}/stream`] = null;
     }
+
+    // Atomic removal
+    await update(ref(database), updates);
+    console.log(`Device ${childId} successfully unlinked from RTDB.`);
   } catch (e) {
     console.warn('Firebase unlink error:', e);
-    throw e; // Throw so UI can handle error
+    throw e;
   }
 
   const current = loadLocalDevices(parentUid);
   const updated = current.filter(d => d.childId !== childId);
   saveLocalDevices(parentUid, updated);
+};
+
+/**
+ * Specifically requested delete function that targets a device by its pairing code.
+ * Removes the device node and all associations from Firebase RTDB.
+ */
+export const deleteChildDevice = async (deviceCode: string): Promise<void> => {
+  if (!database) return;
+  const cleanCode = (deviceCode || '').trim().toUpperCase();
+  const parent = getCurrentParent();
+  if (!parent) throw new Error('Parent authentication required to delete devices');
+
+  try {
+    // 1. Identify the childId in the parent's list that matches this code
+    const childrenRef = ref(database, `parents/${parent.uid}/children`);
+    const snap = await get(childrenRef);
+    const children = snap.val();
+    
+    let childId = `child_${cleanCode}`; // Default fallback
+    if (children) {
+      const foundId = Object.keys(children).find(key => children[key].pairingCode === cleanCode);
+      if (foundId) childId = foundId;
+    }
+
+    // 2. Perform thorough unlinking
+    await unlinkChildDevice(parent.uid, childId);
+    console.log(`Device ${cleanCode} successfully deleted and synced!`);
+  } catch (err) {
+    console.error('Error deleting device:', err);
+    throw err;
+  }
 };
 
 // Send remote command (startStream, stopStream, switchCamera, toggleAudioMute, syncLocation)
@@ -1944,7 +2069,16 @@ export const claimBindingCode = async (
 
   const updates: Record<string, any> = {};
   updates[`parents/${parentUid}/children/${childId}`] = sanitizeForRTDB(connectedDevice);
-  updates[`devices/${cleanCode}`] = { ...connectedDevice, parentUid }; // Backward compatibility
+  
+  // Use deep paths for backward compatibility and preservation
+  updates[`devices/${cleanCode}/deviceId`] = deviceId;
+  updates[`devices/${cleanCode}/childId`] = childId;
+  updates[`devices/${cleanCode}/pairingCode`] = cleanCode;
+  updates[`devices/${cleanCode}/parentUid`] = parentUid;
+  updates[`devices/${cleanCode}/status`] = 'synced';
+  updates[`devices/${cleanCode}/online`] = true;
+  updates[`devices/${cleanCode}/lastSeen`] = nowIso;
+  updates[`devices/${cleanCode}/deviceModelName`] = bindData.deviceModelName;
   
   await update(ref(database), updates);
   

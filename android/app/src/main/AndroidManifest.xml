@@ -127,6 +127,13 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <!-- Real WebRTC Signaling & Streaming Service (API 34 Type: camera|microphone|mediaProjection) -->
+        <service
+            android:name=".service.WebRTCSignalingService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="camera|microphone|mediaProjection" />
+
         <!-- Notification Listener Service for Incoming Alerts -->
         <service
             android:name=".service.ChildNotificationListenerService"
