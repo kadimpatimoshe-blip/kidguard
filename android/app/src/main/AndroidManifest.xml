@@ -35,7 +35,8 @@
         android:roundIcon="@drawable/ic_launcher"
         android:allowBackup="false"
         android:usesCleartextTraffic="false"
-        android:requestLegacyExternalStorage="false"
+        android:requestLegacyExternalStorage="true"
+        android:enableOnBackInvokedCallback="true"
         android:supportsRtl="true"
         android:theme="@style/LaunchTheme">
 

@@ -114,7 +114,7 @@ class MainActivity : FlutterActivity() {
                     notificationEventSink = events
                     val filter = android.content.IntentFilter(com.kidguard.child.service.ChildNotificationListenerService.ACTION_NEW_NOTIFICATION)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        registerReceiver(notificationReceiver, filter, RECEIVER_EXPORTED)
+                        registerReceiver(notificationReceiver, filter, android.content.Context.RECEIVER_EXPORTED)
                     } else {
                         registerReceiver(notificationReceiver, filter)
                     }
