@@ -26,7 +26,7 @@ if (flutterVersionName == null) {
 
 android {
     namespace "com.kidguard.child"
-    compileSdk 35
+    compileSdk 34
     ndkVersion flutter.ndkVersion
 
     compileOptions {
@@ -46,7 +46,7 @@ android {
         applicationId "com.kidguard.child"
         // Required for WebRTC and modern foreground services
         minSdkVersion 24
-        targetSdkVersion 35
+        targetSdkVersion 34
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
 
